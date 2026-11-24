@@ -1,4 +1,5 @@
-"""Request-level dependencies: the database session and the permission check."""
+"""Request-level dependencies: the database session, who is calling, and permissions.
+Every data route works on `Caller.user_id`: users never see each other's money."""
 
 from __future__ import annotations
 
@@ -8,7 +9,8 @@ from dataclasses import dataclass
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from oink.core.security import COOKIE, SCOPES, session_valid, token_for
+from oink.core.db import User
+from oink.core.security import COOKIE, SCOPES, session_user, token_for
 
 
 def get_db(request: Request) -> Iterator[Session]:
@@ -18,21 +20,30 @@ def get_db(request: Request) -> Iterator[Session]:
 
 @dataclass
 class Caller:
-    owner: bool  # the owner in the browser: every scope
+    user: User
+    browser: bool  # signed in with the password: every scope of that user
     scopes: frozenset[str]
     token_name: str = ""
+
+    @property
+    def user_id(self) -> int:
+        return self.user.id
 
 
 def caller(request: Request, db: Session = Depends(get_db)) -> Caller:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
-        token = token_for(db, auth[7:].strip())
-        if token is None:
-            raise HTTPException(401, "token non valido o revocato")
-        return Caller(owner=False, scopes=frozenset(token.scopes), token_name=token.name)
-    if session_valid(db, request.cookies.get(COOKIE)):
-        return Caller(owner=True, scopes=frozenset(SCOPES))
-    raise HTTPException(401, "accesso richiesto")
+        found = token_for(db, auth[7:].strip())
+        if found is None:
+            raise HTTPException(401, "token_invalid")
+        token, user = found
+        return Caller(
+            user=user, browser=False, scopes=frozenset(token.scopes), token_name=token.name
+        )
+    session = session_user(db, request.cookies.get(COOKIE))
+    if session is not None:
+        return Caller(user=session, browser=True, scopes=frozenset(SCOPES))
+    raise HTTPException(401, "login_required")
 
 
 def require(scope: str) -> Callable[[Caller], Caller]:
@@ -40,14 +51,20 @@ def require(scope: str) -> Callable[[Caller], Caller]:
 
     def check(who: Caller = Depends(caller)) -> Caller:
         if scope not in who.scopes:
-            raise HTTPException(403, f"permesso mancante: {scope}")
+            raise HTTPException(403, f"scope_missing:{scope}")
         return who
 
     return check
 
 
-def owner_only(who: Caller = Depends(caller)) -> Caller:
-    """Things a token must never do (manage tokens, the password)."""
-    if not who.owner:
-        raise HTTPException(403, "solo dal browser del proprietario")
+def browser_only(who: Caller = Depends(caller)) -> Caller:
+    """Things a token must never do (tokens, passwords, linking a bank)."""
+    if not who.browser:
+        raise HTTPException(403, "browser_only")
+    return who
+
+
+def admin_only(who: Caller = Depends(browser_only)) -> Caller:
+    if not who.user.is_admin:
+        raise HTTPException(403, "admin_only")
     return who

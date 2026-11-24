@@ -1,5 +1,5 @@
-"""Adding movements: one entry point for every source (bank, import, API, manual), with
-duplicate detection and the owner's category rules."""
+"""Adding movements: one entry point for every source (linked account, statement, API,
+manual), with duplicate detection and the user's category rules."""
 
 from __future__ import annotations
 
@@ -8,67 +8,40 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oink.core.db import Rule, Transaction
+from oink.core.db import Account, Rule, Transaction
 
-#: The default categories (the owner can use any other name).
+#: Built-in categories: stable ids, translated by the web app (each has its own icon).
+#: Users may type any other name; it is shown as written.
 CATEGORIES = [
-    "spesa",
-    "ristoranti",
-    "casa",
-    "bollette",
-    "trasporti",
-    "auto",
-    "salute",
-    "svago",
-    "viaggi",
-    "abbonamenti",
+    "groceries",
+    "restaurants",
+    "home",
+    "bills",
+    "transport",
+    "car",
+    "health",
+    "leisure",
+    "travel",
+    "subscriptions",
     "shopping",
-    "istruzione",
-    "regali",
-    "tasse",
-    "commissioni",
-    "stipendio",
-    "entrate",
-    "trasferimenti",
-    "risparmio",
-    "investimenti",
-    "altro",
+    "education",
+    "gifts",
+    "taxes",
+    "fees",
+    "salary",
+    "income",
+    "transfers",
+    "savings",
+    "investments",
+    "crypto",
+    "other",
 ]
-
-
-def to_cents(value: str | float | int | Decimal) -> int:
-    """«-1.234,56», «1,234.56», «12.5», 12.5 → cents. Raises ValueError when unreadable."""
-    if isinstance(value, int):
-        return value * 100
-    if isinstance(value, float | Decimal):
-        number = Decimal(str(value))
-    else:
-        text = value.strip().replace("€", "").replace(" ", "").replace(" ", "")
-        negative = text.startswith("(") and text.endswith(")")
-        text = text.strip("()")
-        if "," in text and "." in text:
-            if text.rfind(",") > text.rfind("."):  # 1.234,56
-                text = text.replace(".", "").replace(",", ".")
-            else:  # 1,234.56
-                text = text.replace(",", "")
-        elif "," in text:
-            text = text.replace(",", ".")
-        try:
-            number = Decimal(text)
-        except InvalidOperation as exc:
-            raise ValueError(f"importo non leggibile: {value!r}") from exc
-        if negative:
-            number = -number
-    return int((number * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def euros(cents: int) -> float:
-    return cents / 100
+#: Moving money between your own pockets is not spending.
+INTERNAL = {"transfers", "savings", "investments", "crypto"}
 
 
 def normalise(text: str) -> str:
@@ -76,21 +49,20 @@ def normalise(text: str) -> str:
 
 
 def fingerprint(
-    day: date, cents: int, description: str, occurrence: int, external: str = ""
+    day: date, amount: int, description: str, occurrence: int, external: str = ""
 ) -> str:
-    """Stable id of a movement: the bank's id when there is one, otherwise day+amount+text
-    (+ the n-th identical one of that day, so two equal coffees stay two)."""
-    raw = external or f"{day.isoformat()}|{cents}|{normalise(description)}|{occurrence}"
+    """Stable id of a movement: the provider's id when there is one, otherwise
+    day+amount+text (+ the n-th identical one of that day, so two equal coffees stay two)."""
+    raw = external or f"{day.isoformat()}|{amount}|{normalise(description)}|{occurrence}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
 @dataclass
 class NewMovement:
     day: date
-    amount_cents: int
+    amount: int  # minor units of the account's currency
     description: str
     counterparty: str = ""
-    currency: str = "EUR"
     category: str = ""
     external_id: str = ""
     note: str = ""
@@ -111,18 +83,18 @@ def rule_category(rules: list[Rule], text: str) -> str:
 
 
 def add_movements(
-    db: Session, account_id: int, movements: list[NewMovement], source: str
+    db: Session, account: Account, movements: list[NewMovement], source: str
 ) -> AddResult:
-    rules = list(db.scalars(select(Rule)))
+    rules = list(db.scalars(select(Rule).where(Rule.user_id == account.user_id)))
     seen = set(
-        db.scalars(select(Transaction.fingerprint).where(Transaction.account_id == account_id))
+        db.scalars(select(Transaction.fingerprint).where(Transaction.account_id == account.id))
     )
     counts: Counter[tuple[date, int, str]] = Counter()
     added, duplicates = [], 0
     for m in movements:
-        key = (m.day, m.amount_cents, normalise(m.description))
+        key = (m.day, m.amount, normalise(m.description))
         counts[key] += 1
-        fp = fingerprint(m.day, m.amount_cents, m.description, counts[key] - 1, m.external_id)
+        fp = fingerprint(m.day, m.amount, m.description, counts[key] - 1, m.external_id)
         if fp in seen:
             duplicates += 1
             continue
@@ -131,10 +103,11 @@ def add_movements(
         if not category and (found := rule_category(rules, f"{m.description} {m.counterparty}")):
             category, by = found, "rule"
         tx = Transaction(
-            account_id=account_id,
+            user_id=account.user_id,
+            account_id=account.id,
             day=m.day,
-            amount_cents=m.amount_cents,
-            currency=m.currency,
+            amount=m.amount,
+            currency=account.currency,
             description=m.description.strip()[:500],
             counterparty=m.counterparty.strip()[:200],
             category=category,
@@ -150,14 +123,14 @@ def add_movements(
 
 
 def learn_rule(db: Session, tx: Transaction, category: str) -> None:
-    """The owner corrected a category: remember it for the same merchant."""
+    """The user corrected a category: remember it for the same merchant."""
     pattern = normalise(tx.counterparty or tx.description)[:60]
     pattern = re.sub(r"\d{4,}|\b\d{2}/\d{2}(/\d{2,4})?\b", "", pattern).strip()
     if len(pattern) < 3:
         return
-    rule = db.scalar(select(Rule).where(Rule.pattern == pattern))
+    rule = db.scalar(select(Rule).where(Rule.user_id == tx.user_id, Rule.pattern == pattern))
     if rule is None:
-        db.add(Rule(pattern=pattern, category=category))
+        db.add(Rule(user_id=tx.user_id, pattern=pattern, category=category))
     else:
         rule.category = category
     db.commit()

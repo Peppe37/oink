@@ -1,5 +1,5 @@
 """The HTTP API, used by the web app (session cookie) and by other apps (scoped tokens).
-OpenAPI docs at /api/docs."""
+Every data route is scoped to the calling user. OpenAPI docs at /api/docs."""
 
 from __future__ import annotations
 
@@ -22,45 +22,67 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from oink.api.deps import Caller, get_db, owner_only, require
+from oink.api.deps import Caller, admin_only, browser_only, caller, get_db, require
 from oink.api.schemas import (
     AccountIn,
     AccountOut,
     AccountPatch,
     Ask,
+    BankAccess,
+    BankLink,
     ConnectionOut,
     ImportOut,
+    InviteAccept,
+    KeyLink,
     Login,
     PasswordChange,
+    ProfilePatch,
     ReportOut,
     RequestOut,
+    Setup,
     TokenIn,
     TokenOut,
     TransactionIn,
     TransactionOut,
     TransactionPatch,
+    UserIn,
+    UserOut,
+    UserPatch,
+    user_out,
 )
 from oink.core.config import Settings
-from oink.core.db import Account, ApiToken, Connection, Report, StatementRequest, Transaction
+from oink.core.db import Account, ApiToken, Connection, Report, StatementRequest, Transaction, User
+from oink.core.money import CRYPTO, FIAT, MoneyError, normalise_code, to_minor
 from oink.core.security import (
     COOKIE,
     SCOPES,
+    AuthError,
+    Vault,
+    authenticate,
+    create_invite,
     create_token,
+    create_user,
     end_session,
+    invite_user,
     new_session,
-    owner_password,
-    set_owner_password,
+    session_user,
+    set_password,
+    user_count,
     verify_password,
 )
-from oink.providers.enablebanking import BankError
+from oink.providers import PROVIDERS, ProviderError
+from oink.providers.enablebanking import COUNTRIES, EnableBanking
+from oink.services import fx, updates
 from oink.services import reports as rep
 from oink.services.ai import AI, AIError
-from oink.services.importer import ImportError_, guess_month, parse_statement
-from oink.services.jobs import bank_client, categorize_pending, monthly_report, sync_connection
+from oink.services.connections import banking, finish_bank, link_with_key, save_banking, sync
+from oink.services.importer import ImportError_, parse_statement
+from oink.services.jobs import categorize_pending, monthly_report
 from oink.services.ledger import CATEGORIES, NewMovement, add_movements, learn_rule
+from oink.services.statements import MAX_FILE, apply, pick_account
 
 api = APIRouter(prefix="/api")
-MAX_UPLOAD = 15 * 1024 * 1024
+MONTH = r"^\d{4}-\d{2}$"
 
 
 def settings_of(request: Request) -> Settings:
@@ -73,58 +95,45 @@ def ai_of(request: Request) -> AI:
     return ai
 
 
+def vault_of(request: Request) -> Vault:
+    vault: Vault = request.app.state.vault
+    return vault
+
+
 def current_month() -> str:
     return date.today().strftime("%Y-%m")
 
 
+def fail(status: int, exc: Exception) -> HTTPException:
+    return HTTPException(status, getattr(exc, "code", None) or str(exc))
+
+
+def public(request: Request, path: str) -> str:
+    return f"{settings_of(request).public_url.rstrip('/')}{path}"
+
+
 # -- auth ------------------------------------------------------------------------------
 @api.get("/health")
-def health() -> dict[str, bool]:
-    return {"ok": True}
+def health() -> dict[str, Any]:
+    return {"ok": True, "version": updates.current_version()}
 
 
 @api.get("/auth/status")
 def auth_status(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    from oink.core.security import session_valid
-
     s = settings_of(request)
+    user = session_user(db, request.cookies.get(COOKIE))
     return {
-        "configured": owner_password(db) is not None,
-        "logged_in": session_valid(db, request.cookies.get(COOKIE)),
+        "configured": user_count(db) > 0,
+        "user": user_out(user).model_dump(mode="json") if user else None,
         "ai": s.ai_enabled,
-        "banking": s.banking_enabled,
-        "currency": s.currency,
+        "ai_reads_text": ai_of(request).can_read_text,
+        "banking": banking(db, s) is not None,
+        "version": updates.current_version(),
     }
 
 
-@api.post("/auth/setup")
-def setup(
-    body: Login, request: Request, response: Response, db: Session = Depends(get_db)
-) -> dict[str, bool]:
-    """First run only: choose the owner's password."""
-    if owner_password(db) is not None:
-        raise HTTPException(409, "già configurato")
-    try:
-        set_owner_password(db, body.password)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    _login(response, db, settings_of(request))
-    return {"ok": True}
-
-
-@api.post("/auth/login")
-def login(
-    body: Login, request: Request, response: Response, db: Session = Depends(get_db)
-) -> dict[str, bool]:
-    stored = owner_password(db)
-    if stored is None or not verify_password(stored, body.password):
-        raise HTTPException(401, "password sbagliata")
-    _login(response, db, settings_of(request))
-    return {"ok": True}
-
-
-def _login(response: Response, db: Session, settings: Settings) -> None:
-    cookie = new_session(db, settings.session_days)
+def _login(response: Response, db: Session, user: User, settings: Settings) -> None:
+    cookie = new_session(db, user, settings.session_days)
     response.set_cookie(
         COOKIE,
         cookie,
@@ -135,6 +144,66 @@ def _login(response: Response, db: Session, settings: Settings) -> None:
     )
 
 
+@api.post("/auth/setup")
+def setup(
+    body: Setup, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """First run only: create the admin."""
+    if user_count(db) > 0:
+        raise HTTPException(409, "already_configured")
+    try:
+        currency = normalise_code(body.base_currency)
+        user = create_user(
+            db,
+            body.username,
+            body.password,
+            admin=True,
+            language=body.language,
+            base_currency=currency,
+        )
+    except (AuthError, MoneyError) as exc:
+        raise fail(422, exc) from exc
+    _login(response, db, user, settings_of(request))
+    return {"ok": True}
+
+
+@api.post("/auth/login")
+def login(
+    body: Login, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    user = authenticate(db, body.username, body.password)
+    if user is None:
+        raise HTTPException(401, "wrong_credentials")
+    _login(response, db, user, settings_of(request))
+    return {"ok": True}
+
+
+@api.get("/auth/invite/{token}")
+def invite_info(token: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    found = invite_user(db, token)
+    if found is None:
+        raise HTTPException(404, "invite_invalid")
+    return {"username": found[1].username, "name": found[1].name}
+
+
+@api.post("/auth/invite")
+def accept_invite(
+    body: InviteAccept, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    found = invite_user(db, body.token)
+    if found is None:
+        raise HTTPException(404, "invite_invalid")
+    invite, user = found
+    try:
+        set_password(db, user, body.password)
+    except AuthError as exc:
+        raise fail(422, exc) from exc
+    invite.used = True
+    db.commit()
+    _login(response, db, user, settings_of(request))
+    return {"ok": True}
+
+
 @api.post("/auth/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, bool]:
     end_session(db, request.cookies.get(COOKIE))
@@ -142,108 +211,265 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)) 
     return {"ok": True}
 
 
-@api.post("/auth/password", dependencies=[Depends(owner_only)])
-def change_password(body: PasswordChange, db: Session = Depends(get_db)) -> dict[str, bool]:
-    stored = owner_password(db)
-    if stored is None or not verify_password(stored, body.current):
-        raise HTTPException(401, "password attuale sbagliata")
-    set_owner_password(db, body.new)
+@api.post("/auth/password")
+def change_password(
+    body: PasswordChange,
+    request: Request,
+    response: Response,
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    user = db.get(User, who.user_id)
+    assert user is not None
+    if not verify_password(user.password_hash, body.current):
+        raise HTTPException(401, "wrong_password")
+    try:
+        set_password(db, user, body.new)
+    except AuthError as exc:
+        raise fail(422, exc) from exc
+    _login(response, db, user, settings_of(request))  # the other sessions were closed
+    return {"ok": True}
+
+
+@api.get("/me", response_model=UserOut)
+def me(who: Caller = Depends(caller)) -> UserOut:
+    return user_out(who.user)
+
+
+@api.patch("/me", response_model=UserOut)
+def update_me(
+    body: ProfilePatch, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
+) -> UserOut:
+    user = db.get(User, who.user_id)
+    assert user is not None
+    if body.name is not None:
+        user.name = body.name.strip() or user.username
+    if body.language is not None:
+        user.language = body.language
+    if body.base_currency is not None:
+        try:
+            user.base_currency = normalise_code(body.base_currency)
+        except MoneyError as exc:
+            raise fail(422, exc) from exc
+    db.commit()
+    return user_out(user)
+
+
+# -- users (admin) ---------------------------------------------------------------------
+@api.get("/users", response_model=list[UserOut], dependencies=[Depends(admin_only)])
+def list_users(db: Session = Depends(get_db)) -> list[UserOut]:
+    return [user_out(u) for u in db.scalars(select(User).order_by(User.created))]
+
+
+@api.post("/users", dependencies=[Depends(admin_only)])
+def add_user(body: UserIn, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Creates the user and returns a one-time invite link (valid 7 days)."""
+    try:
+        user = create_user(
+            db,
+            body.username,
+            None,
+            admin=body.is_admin,
+            name=body.name,
+            base_currency=settings_of(request).currency,
+        )
+    except AuthError as exc:
+        raise fail(422, exc) from exc
+    token = create_invite(db, user)
+    return {
+        "user": user_out(user).model_dump(mode="json"),
+        "invite_url": public(request, f"/invite/{token}"),
+    }
+
+
+@api.post("/users/{user_id}/invite", dependencies=[Depends(admin_only)])
+def reinvite(user_id: int, request: Request, db: Session = Depends(get_db)) -> dict[str, str]:
+    """A new link (also to reset a forgotten password)."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user_unknown")
+    return {"invite_url": public(request, f"/invite/{create_invite(db, user)}")}
+
+
+@api.patch("/users/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: int, body: UserPatch, who: Caller = Depends(admin_only), db: Session = Depends(get_db)
+) -> UserOut:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user_unknown")
+    if user.id == who.user_id and (body.is_admin is False or body.disabled):
+        raise HTTPException(422, "cannot_demote_self")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(user, key, value)
+    db.commit()
+    return user_out(user)
+
+
+@api.delete("/users/{user_id}")
+def delete_user(
+    user_id: int, who: Caller = Depends(admin_only), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """Deletes the user AND all their data."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user_unknown")
+    if user.id == who.user_id:
+        raise HTTPException(422, "cannot_delete_self")
+    db.delete(user)
+    db.commit()
     return {"ok": True}
 
 
 # -- tokens ----------------------------------------------------------------------------
 @api.get("/scopes")
-def scopes() -> dict[str, str]:
-    return SCOPES
+def scopes() -> list[str]:
+    return list(SCOPES)
 
 
-@api.get("/tokens", response_model=list[TokenOut], dependencies=[Depends(owner_only)])
-def list_tokens(db: Session = Depends(get_db)) -> list[ApiToken]:
-    return list(db.scalars(select(ApiToken).order_by(ApiToken.created.desc())))
+@api.get("/tokens", response_model=list[TokenOut])
+def list_tokens(who: Caller = Depends(browser_only), db: Session = Depends(get_db)) -> Any:
+    return list(
+        db.scalars(
+            select(ApiToken)
+            .where(ApiToken.user_id == who.user_id)
+            .order_by(ApiToken.created.desc())
+        )
+    )
 
 
-@api.post("/tokens", dependencies=[Depends(owner_only)])
-def new_token(body: TokenIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+@api.post("/tokens")
+def new_token(
+    body: TokenIn, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
+) -> dict[str, Any]:
     """The token is in the answer ONLY here: copy it now."""
     try:
-        token, secret = create_token(db, body.name, body.scopes)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        token, secret = create_token(db, who.user, body.name, body.scopes)
+    except AuthError as exc:
+        raise fail(422, exc) from exc
     return {"token": secret, **TokenOut.model_validate(token).model_dump(mode="json")}
 
 
-@api.delete("/tokens/{token_id}", dependencies=[Depends(owner_only)])
-def revoke_token(token_id: int, db: Session = Depends(get_db)) -> dict[str, bool]:
+@api.delete("/tokens/{token_id}")
+def revoke_token(
+    token_id: int, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
+) -> dict[str, bool]:
     token = db.get(ApiToken, token_id)
-    if token is None:
-        raise HTTPException(404, "token inesistente")
+    if token is None or token.user_id != who.user_id:
+        raise HTTPException(404, "token_unknown")
     token.revoked = True
     db.commit()
     return {"ok": True}
 
 
 # -- accounts --------------------------------------------------------------------------
-@api.get(
-    "/accounts", response_model=list[AccountOut], dependencies=[Depends(require("accounts:read"))]
-)
-def accounts(db: Session = Depends(get_db), archived: bool = False) -> list[Account]:
-    query = select(Account).order_by(Account.created)
+@api.get("/currencies")
+def currencies() -> dict[str, list[str]]:
+    return {"fiat": FIAT, "crypto": sorted(CRYPTO)}
+
+
+@api.get("/accounts", response_model=list[AccountOut])
+def accounts(
+    archived: bool = False,
+    who: Caller = Depends(require("accounts:read")),
+    db: Session = Depends(get_db),
+) -> list[AccountOut]:
+    query = select(Account).where(Account.user_id == who.user_id).order_by(Account.created)
     if not archived:
         query = query.where(Account.archived.is_(False))
-    return list(db.scalars(query))
+    return [AccountOut.of(a) for a in db.scalars(query)]
 
 
-@api.post("/accounts", response_model=AccountOut, dependencies=[Depends(require("accounts:write"))])
-def create_account(body: AccountIn, db: Session = Depends(get_db)) -> Account:
+def _clean_iban(iban: str) -> str:
+    return iban.replace(" ", "").upper()
+
+
+@api.post("/accounts", response_model=AccountOut)
+def create_account(
+    body: AccountIn, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> AccountOut:
+    try:
+        currency = normalise_code(body.currency)
+        balance = to_minor(body.balance, currency) if body.balance not in (None, "") else None
+    except MoneyError as exc:
+        raise fail(422, exc) from exc
     account = Account(
-        **body.model_dump(),
+        user_id=who.user_id,
+        name=body.name,
+        kind="crypto" if currency in CRYPTO and body.kind == "checking" else body.kind,
+        institution=body.institution,
+        iban=_clean_iban(body.iban),
+        currency=currency,
+        color=body.color,
         source="manual",
-        balance_at=datetime.now(UTC) if body.balance_cents is not None else None,
+        balance=balance,
+        balance_at=datetime.now(UTC) if balance is not None else None,
     )
     db.add(account)
     db.commit()
+    return AccountOut.of(account)
+
+
+def _account(db: Session, who: Caller, account_id: int) -> Account:
+    account = db.get(Account, account_id)
+    if account is None or account.user_id != who.user_id:
+        raise HTTPException(404, "account_unknown")
     return account
 
 
-@api.patch(
-    "/accounts/{account_id}",
-    response_model=AccountOut,
-    dependencies=[Depends(require("accounts:write"))],
-)
-def update_account(account_id: int, body: AccountPatch, db: Session = Depends(get_db)) -> Account:
-    account = _account(db, account_id)
+@api.patch("/accounts/{account_id}", response_model=AccountOut)
+def update_account(
+    account_id: int,
+    body: AccountPatch,
+    who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> AccountOut:
+    account = _account(db, who, account_id)
     changes = body.model_dump(exclude_unset=True)
+    if "balance" in changes:
+        value = changes.pop("balance")
+        try:
+            account.balance = to_minor(value, account.currency) if value not in (None, "") else None
+        except MoneyError as exc:
+            raise fail(422, exc) from exc
+        account.balance_at = datetime.now(UTC)
+    if "iban" in changes:
+        changes["iban"] = _clean_iban(changes["iban"] or "")
     for key, value in changes.items():
         setattr(account, key, value)
-    if "balance_cents" in changes:
-        account.balance_at = datetime.now(UTC)
     db.commit()
-    return account
+    return AccountOut.of(account)
 
 
-def _account(db: Session, account_id: int) -> Account:
-    account = db.get(Account, account_id)
-    if account is None:
-        raise HTTPException(404, "conto inesistente")
-    return account
+@api.delete("/accounts/{account_id}")
+def delete_account(
+    account_id: int,
+    who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Deletes the account and its movements (archive it to keep the history)."""
+    db.delete(_account(db, who, account_id))
+    db.commit()
+    return {"ok": True}
 
 
 # -- transactions ----------------------------------------------------------------------
-@api.get(
-    "/transactions",
-    response_model=list[TransactionOut],
-    dependencies=[Depends(require("transactions:read"))],
-)
+@api.get("/transactions", response_model=list[TransactionOut])
 def transactions(
-    db: Session = Depends(get_db),
     account_id: int | None = None,
-    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
+    month: str | None = Query(default=None, pattern=MONTH),
     category: str | None = None,
     q: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
-) -> list[Transaction]:
-    query = select(Transaction).order_by(Transaction.day.desc(), Transaction.id.desc())
+    who: Caller = Depends(require("transactions:read")),
+    db: Session = Depends(get_db),
+) -> list[TransactionOut]:
+    query = (
+        select(Transaction)
+        .where(Transaction.user_id == who.user_id)
+        .order_by(Transaction.day.desc(), Transaction.id.desc())
+    )
     if account_id is not None:
         query = query.where(Transaction.account_id == account_id)
     if month:
@@ -260,51 +486,52 @@ def transactions(
                 Transaction.note.ilike(like),
             )
         )
-    return list(db.scalars(query.limit(limit).offset(offset)))
+    return [TransactionOut.of(t) for t in db.scalars(query.limit(limit).offset(offset))]
 
 
-@api.post(
-    "/transactions",
-    response_model=TransactionOut,
-    dependencies=[Depends(require("transactions:write"))],
-)
-def add_transaction(body: TransactionIn, db: Session = Depends(get_db)) -> Transaction:
-    account = _account(db, body.account_id)
-    result = add_movements(
-        db,
-        account.id,
-        [
-            NewMovement(
-                day=body.day,
-                amount_cents=body.amount_cents,
-                description=body.description,
-                counterparty=body.counterparty,
-                category=body.category,
-                note=body.note,
-                currency=account.currency,
-            )
-        ],
-        "api",
+@api.post("/transactions", response_model=TransactionOut)
+def add_transaction(
+    body: TransactionIn,
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> TransactionOut:
+    account = _account(db, who, body.account_id)
+    try:
+        amount = to_minor(body.amount, account.currency)
+    except MoneyError as exc:
+        raise fail(422, exc) from exc
+    movement = NewMovement(
+        day=body.day,
+        amount=amount,
+        description=body.description,
+        counterparty=body.counterparty,
+        category=body.category.strip().lower(),
+        note=body.note,
     )
+    result = add_movements(db, account, [movement], "manual" if who.browser else "api")
     if not result.added:
-        raise HTTPException(409, "movimento già presente")
-    if account.balance_cents is not None and account.source == "manual":
-        account.balance_cents += body.amount_cents
+        raise HTTPException(409, "duplicate")
+    if account.balance is not None and account.source == "manual":
+        account.balance += amount
         db.commit()
-    return result.added[0]
+    return TransactionOut.of(result.added[0])
 
 
-@api.patch(
-    "/transactions/{tx_id}",
-    response_model=TransactionOut,
-    dependencies=[Depends(require("transactions:write"))],
-)
-def update_transaction(
-    tx_id: int, body: TransactionPatch, db: Session = Depends(get_db)
-) -> Transaction:
+def _tx(db: Session, who: Caller, tx_id: int) -> Transaction:
     tx = db.get(Transaction, tx_id)
-    if tx is None:
-        raise HTTPException(404, "movimento inesistente")
+    if tx is None or tx.user_id != who.user_id:
+        raise HTTPException(404, "transaction_unknown")
+    return tx
+
+
+@api.patch("/transactions/{tx_id}", response_model=TransactionOut)
+def update_transaction(
+    tx_id: int,
+    body: TransactionPatch,
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> TransactionOut:
+    tx = _tx(db, who, tx_id)
     if body.category is not None:
         tx.category, tx.category_by = body.category.strip().lower(), "user"
         if body.learn and tx.category:
@@ -312,205 +539,278 @@ def update_transaction(
     if body.note is not None:
         tx.note = body.note
     db.commit()
-    return tx
+    return TransactionOut.of(tx)
+
+
+@api.delete("/transactions/{tx_id}")
+def delete_transaction(
+    tx_id: int,
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    tx = _tx(db, who, tx_id)
+    account = db.get(Account, tx.account_id)
+    if account is not None and account.source == "manual" and account.balance is not None:
+        account.balance -= tx.amount
+    db.delete(tx)
+    db.commit()
+    return {"ok": True}
 
 
 @api.get("/categories")
 def categories(
-    db: Session = Depends(get_db), _: Caller = Depends(require("transactions:read"))
-) -> list[str]:
-    used = set(db.scalars(select(Transaction.category).distinct()))
-    return sorted(set(CATEGORIES) | {c for c in used if c})
-
-
-@api.post("/transactions/categorize", dependencies=[Depends(require("transactions:write"))])
-async def categorize(request: Request, db: Session = Depends(get_db)) -> dict[str, int]:
-    return {"categorized": await categorize_pending(db, ai_of(request))}
-
-
-# -- imports and statement requests ----------------------------------------------------
-@api.post("/imports", response_model=ImportOut, dependencies=[Depends(require("imports:write"))])
-async def import_statement(
-    request: Request,
-    account_id: int = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-) -> ImportOut:
-    account = _account(db, account_id)
-    raw = await file.read(MAX_UPLOAD + 1)
-    if len(raw) > MAX_UPLOAD:
-        raise HTTPException(413, "file troppo grande (max 15 MB)")
-    try:
-        parsed = await parse_statement(file.filename or "estratto", raw, ai_of(request))
-    except ImportError_ as exc:
-        raise HTTPException(422, str(exc)) from exc
-    result = add_movements(db, account.id, parsed.movements, "import")
-    month = guess_month(parsed.movements)
-    balance_updated = False
-    if parsed.balance_cents is not None and account.source == "manual":
-        account.balance_cents, account.balance_at = parsed.balance_cents, datetime.now(UTC)
-        balance_updated = True
-    req = db.scalar(
-        select(StatementRequest).where(
-            StatementRequest.account_id == account.id,
-            StatementRequest.month == month,
-            StatementRequest.status == "open",
+    who: Caller = Depends(require("transactions:read")), db: Session = Depends(get_db)
+) -> dict[str, list[str]]:
+    used = set(
+        db.scalars(
+            select(Transaction.category).where(Transaction.user_id == who.user_id).distinct()
         )
     )
-    if req is not None:
-        req.status, req.done_at = "done", datetime.now(UTC)
-    db.commit()
-    return ImportOut(
-        added=len(result.added),
-        duplicates=result.duplicates,
-        month=month,
-        by_ai=parsed.by_ai,
-        balance_updated=balance_updated,
-        request_closed=req is not None,
-    )
+    return {"builtin": CATEGORIES, "custom": sorted(c for c in used if c and c not in CATEGORIES)}
 
 
-@api.get(
-    "/requests", response_model=list[RequestOut], dependencies=[Depends(require("requests:read"))]
-)
+@api.post("/transactions/categorize")
+async def categorize(
+    request: Request,
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    return {"categorized": await categorize_pending(db, ai_of(request), who.user_id)}
+
+
+# -- statements ------------------------------------------------------------------------
+@api.post("/imports", response_model=ImportOut)
+async def import_statement(
+    request: Request,
+    file: UploadFile = File(...),
+    account_id: int | None = Form(default=None),
+    who: Caller = Depends(require("imports:write")),
+    db: Session = Depends(get_db),
+) -> ImportOut:
+    """CSV, OFX/QFX or PDF. Without `account_id` the IBAN on the statement picks the account."""
+    raw = await file.read(MAX_FILE + 1)
+    if len(raw) > MAX_FILE:
+        raise HTTPException(413, "file_too_big")
+    try:
+        parsed = await parse_statement(file.filename or "statement", raw, ai_of(request))
+        account = pick_account(db, who.user, parsed, account_id)
+    except ImportError_ as exc:
+        raise fail(422, exc) from exc
+    return ImportOut(**apply(db, account, parsed).__dict__)
+
+
+@api.get("/requests", response_model=list[RequestOut])
 def statement_requests(
-    db: Session = Depends(get_db), status: str = "open"
-) -> list[StatementRequest]:
+    status: str = "open",
+    who: Caller = Depends(require("requests:read")),
+    db: Session = Depends(get_db),
+) -> Any:
     return list(
         db.scalars(
             select(StatementRequest)
-            .where(StatementRequest.status == status)
+            .where(StatementRequest.user_id == who.user_id, StatementRequest.status == status)
             .order_by(StatementRequest.created)
         )
     )
 
 
-@api.post(
-    "/requests/{req_id}/skip",
-    response_model=RequestOut,
-    dependencies=[Depends(require("requests:write"))],
-)
-def skip_request(req_id: int, db: Session = Depends(get_db)) -> StatementRequest:
+@api.post("/requests/{req_id}/skip", response_model=RequestOut)
+def skip_request(
+    req_id: int, who: Caller = Depends(require("requests:write")), db: Session = Depends(get_db)
+) -> Any:
     req = db.get(StatementRequest, req_id)
-    if req is None:
-        raise HTTPException(404, "richiesta inesistente")
+    if req is None or req.user_id != who.user_id:
+        raise HTTPException(404, "request_unknown")
     req.status, req.done_at = "skipped", datetime.now(UTC)
     db.commit()
     return req
 
 
 # -- reports ---------------------------------------------------------------------------
-@api.get("/reports/summary", dependencies=[Depends(require("reports:read"))])
+@api.get("/reports/summary")
 def summary(
-    db: Session = Depends(get_db), month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$")
+    month: str | None = Query(default=None, pattern=MONTH),
+    who: Caller = Depends(require("reports:read")),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    return rep.compare(db, month or current_month())
+    return rep.compare(rep.Book.of(db, who.user), month or current_month())
 
 
-@api.get("/reports/overview", dependencies=[Depends(require("reports:read"))])
-def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
+@api.get("/reports/overview")
+def overview(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
     """Everything the home screen needs in one call."""
+    book = rep.Book.of(db, who.user)
     return {
-        "net_worth": rep.net_worth(db),
-        "month": rep.compare(db, current_month()),
-        "series": rep.series(db, 12),
-        "balance": rep.balance_history(db, 180),
-        "recurring": rep.recurring(db),
+        "currency": book.base,
+        "net_worth": rep.net_worth(book),
+        "month": rep.compare(book, current_month()),
+        "series": rep.series(book, 12),
+        "balance": rep.balance_history(book, 180),
+        "recurring": rep.recurring(book),
         "open_requests": db.scalar(
             select(func.count())
             .select_from(StatementRequest)
-            .where(StatementRequest.status == "open")
+            .where(StatementRequest.user_id == who.user_id, StatementRequest.status == "open")
         ),
     }
 
 
-@api.get("/reports/recurring", dependencies=[Depends(require("reports:read"))])
-def recurring(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return rep.recurring(db)
+@api.get("/reports/recurring")
+def recurring(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    return rep.recurring(rep.Book.of(db, who.user))
 
 
-@api.get(
-    "/reports", response_model=list[ReportOut], dependencies=[Depends(require("reports:read"))]
-)
-def list_reports(db: Session = Depends(get_db)) -> list[Report]:
-    return list(db.scalars(select(Report).order_by(Report.created.desc()).limit(24)))
+@api.get("/reports", response_model=list[ReportOut])
+def list_reports(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> Any:
+    return list(
+        db.scalars(
+            select(Report)
+            .where(Report.user_id == who.user_id)
+            .order_by(Report.created.desc())
+            .limit(24)
+        )
+    )
 
 
-@api.post(
-    "/reports/generate", response_model=ReportOut, dependencies=[Depends(require("reports:write"))]
-)
+@api.post("/reports/generate", response_model=ReportOut)
 async def generate_report(
     request: Request,
+    month: str | None = Query(default=None, pattern=MONTH),
+    language: str = Query(default="", max_length=8),
+    who: Caller = Depends(require("reports:write")),
     db: Session = Depends(get_db),
-    month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
-) -> Report:
+) -> Any:
     try:
         return await monthly_report(
-            db, ai_of(request), month or current_month(), settings_of(request)
+            db, ai_of(request), who.user, month or current_month(), settings_of(request), language
         )
     except AIError as exc:
-        raise HTTPException(503, str(exc)) from exc
+        raise fail(503, exc) from exc
 
 
-@api.post("/ask", dependencies=[Depends(require("ai:ask"))])
-async def ask(body: Ask, request: Request, db: Session = Depends(get_db)) -> dict[str, str]:
-    settings = settings_of(request)
+@api.post("/ask")
+async def ask(
+    body: Ask,
+    request: Request,
+    language: str = Query(default="", max_length=8),
+    who: Caller = Depends(require("ai:ask")),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
     facts = rep.facts_for_ai(
-        db, body.month or current_month(), with_text=settings.ai_send_descriptions
+        rep.Book.of(db, who.user),
+        body.month or current_month(),
+        with_text=settings_of(request).ai_send_descriptions,
     )
     try:
-        return {"answer": await ai_of(request).answer(body.question, facts)}
+        answer = await ai_of(request).answer(
+            body.question, facts, language or who.user.language or "en"
+        )
     except AIError as exc:
-        raise HTTPException(503, str(exc)) from exc
+        raise fail(503, exc) from exc
+    return {"answer": answer}
 
 
-# -- banks -----------------------------------------------------------------------------
-@api.get("/banks", dependencies=[Depends(require("banks:read"))])
-async def banks(request: Request) -> list[dict[str, Any]]:
-    settings = settings_of(request)
-    client = bank_client(settings)
-    if client is None:
-        raise HTTPException(503, "collegamento bancario non configurato")
+# -- connections -----------------------------------------------------------------------
+@api.get("/providers")
+def providers(
+    request: Request, who: Caller = Depends(caller), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """What can be linked, for the «add account» wizard."""
+    return {
+        "banking": banking(db, settings_of(request)) is not None,
+        "countries": COUNTRIES,
+        "keyed": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "kind": p.kind,
+                "docs": p.docs,
+                "movements": p.movements_supported,
+                "fields": [
+                    {"name": f.name, "secret": f.secret, "placeholder": f.placeholder}
+                    for f in p.fields
+                ],
+            }
+            for p in PROVIDERS.values()
+        ],
+    }
+
+
+@api.get("/connections", response_model=list[ConnectionOut])
+def connections(
+    who: Caller = Depends(require("connections:read")), db: Session = Depends(get_db)
+) -> Any:
+    return list(
+        db.scalars(
+            select(Connection).where(
+                Connection.user_id == who.user_id, Connection.status != "pending"
+            )
+        )
+    )
+
+
+@api.post("/connections/key", response_model=ConnectionOut)
+async def link_key(
+    body: KeyLink,
+    request: Request,
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
+) -> Any:
+    """An exchange, fintech or wallet: checked right away by reading its accounts."""
     try:
-        return await client.banks(settings.enable_banking_country)
-    except BankError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        return await link_with_key(
+            db, vault_of(request), who.user, body.provider, body.credentials, body.label
+        )
+    except ProviderError as exc:
+        raise fail(422, exc) from exc
 
 
-@api.get(
-    "/banks/connections",
-    response_model=list[ConnectionOut],
-    dependencies=[Depends(require("banks:read"))],
-)
-def connections(db: Session = Depends(get_db)) -> list[Connection]:
-    return list(db.scalars(select(Connection).where(Connection.status != "pending")))
+@api.get("/connections/banks")
+async def banks(
+    request: Request,
+    country: str = Query(min_length=2, max_length=2),
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    bank = banking(db, settings_of(request))
+    if bank is None:
+        raise HTTPException(503, "banking_off")
+    try:
+        return await bank.banks(country.upper())
+    except ProviderError as exc:
+        raise fail(502, exc) from exc
 
 
-@api.post("/banks/connect", dependencies=[Depends(owner_only)])
-async def connect_bank(
-    request: Request, bank: str = Form(...), db: Session = Depends(get_db)
+@api.post("/connections/bank")
+async def link_bank(
+    body: BankLink,
+    request: Request,
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    """Only the owner, in the browser: the bank's login opens in their hands."""
-    settings = settings_of(request)
-    client = bank_client(settings)
-    if client is None:
-        raise HTTPException(503, "collegamento bancario non configurato")
+    """The bank's own login opens in the user's hands; it comes back to /callback."""
+    bank = banking(db, settings_of(request))
+    if bank is None:
+        raise HTTPException(503, "banking_off")
     state = secrets.token_urlsafe(24)
-    db.add(Connection(provider="enablebanking", institution=bank, state=state))
+    db.add(Connection(user_id=who.user_id, provider="enablebanking", label=body.bank, state=state))
     db.commit()
     try:
-        url = await client.start(
-            bank,
-            settings.enable_banking_country,
-            state,
-            f"{settings.public_url.rstrip('/')}/api/banks/callback",
+        url = await bank.start(
+            body.bank, body.country.upper(), state, public(request, "/api/connections/callback")
         )
-    except BankError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    except ProviderError as exc:
+        raise fail(502, exc) from exc
     return {"url": url}
 
 
-@api.get("/banks/callback", include_in_schema=False)
+@api.get("/connections/callback", include_in_schema=False)
 async def bank_callback(
     request: Request,
     state: str = "",
@@ -521,45 +821,96 @@ async def bank_callback(
     conn = db.scalar(
         select(Connection).where(Connection.state == state, Connection.status == "pending")
     )
-    client = bank_client(settings_of(request))
-    if conn is None or client is None or not code:
-        return RedirectResponse(f"/settings?bank=error&reason={error or 'stato'}", status_code=303)
+    bank = banking(db, settings_of(request))
+    if conn is None or bank is None or not code:
+        return RedirectResponse(f"/accounts?linked=error&reason={error or 'state'}", 303)
     try:
-        session = await client.finish(code)
-    except BankError:
+        await finish_bank(db, vault_of(request), bank, conn, code)
+    except ProviderError:
         conn.status = "error"
         db.commit()
-        return RedirectResponse("/settings?bank=error", status_code=303)
-    conn.session_id, conn.status = session["session_id"], "active"
-    conn.state = f"done-{conn.id}-{secrets.token_hex(4)}"
-    if session["valid_until"]:
-        conn.valid_until = datetime.fromisoformat(session["valid_until"].replace("Z", "+00:00"))
-    for acc in session["accounts"]:
-        existing = db.scalar(select(Account).where(Account.external_id == acc["uid"]))
-        if existing is None:
-            db.add(
-                Account(
-                    name=acc["name"],
-                    institution=conn.institution,
-                    currency=acc["currency"],
-                    source="bank",
-                    connection_id=conn.id,
-                    external_id=acc["uid"],
-                )
-            )
-        else:
-            existing.connection_id = conn.id
-    db.commit()
-    await sync_connection(db, client, conn)
-    return RedirectResponse("/settings?bank=ok", status_code=303)
+        return RedirectResponse("/accounts?linked=error", 303)
+    await sync(db, vault_of(request), conn, bank)
+    return RedirectResponse("/accounts?linked=ok", 303)
 
 
-@api.post("/banks/sync", dependencies=[Depends(require("banks:write"))])
-async def sync_banks(request: Request, db: Session = Depends(get_db)) -> dict[str, int]:
-    client = bank_client(settings_of(request))
-    if client is None:
-        raise HTTPException(503, "collegamento bancario non configurato")
+@api.post("/connections/sync")
+async def sync_connections(
+    request: Request,
+    who: Caller = Depends(require("connections:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    bank = banking(db, settings_of(request))
     added = 0
-    for conn in db.scalars(select(Connection).where(Connection.status.in_(("active", "error")))):
-        added += await sync_connection(db, client, conn)
+    for conn in db.scalars(
+        select(Connection).where(
+            Connection.user_id == who.user_id, Connection.status.in_(("active", "error"))
+        )
+    ):
+        added += await sync(db, vault_of(request), conn, bank)
+    await fx.refresh(db, fx.currencies_in_use(db))
     return {"added": added}
+
+
+@api.delete("/connections/{conn_id}")
+def unlink(
+    conn_id: int,
+    keep_accounts: bool = True,
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    """Forget the credentials; the accounts stay (as manual) unless asked otherwise."""
+    conn = db.get(Connection, conn_id)
+    if conn is None or conn.user_id != who.user_id:
+        raise HTTPException(404, "connection_unknown")
+    for acc in db.scalars(select(Account).where(Account.connection_id == conn.id)):
+        if keep_accounts:
+            acc.source, acc.connection_id = "manual", None
+        else:
+            db.delete(acc)
+    db.delete(conn)
+    db.commit()
+    return {"ok": True}
+
+
+# -- system (admin) --------------------------------------------------------------------
+@api.get("/system")
+async def system(
+    request: Request, who: Caller = Depends(caller), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    settings = settings_of(request)
+    info: dict[str, Any] = {"version": updates.current_version()}
+    if who.browser and who.user.is_admin:
+        info["updates"] = await updates.status(settings)
+        info["ai_model"] = settings.ai_model
+        info["banking"] = banking(db, settings) is not None
+        info["callback_url"] = public(request, "/api/connections/callback")
+        info["inbox"] = str(settings.inbox_dir)
+    return info
+
+
+@api.post("/system/update", dependencies=[Depends(admin_only)])
+async def install_update(request: Request) -> dict[str, Any]:
+    settings = settings_of(request)
+    found = await updates.status(settings)
+    if not found["update_available"]:
+        raise HTTPException(409, "up_to_date")
+    if not found["can_install"]:
+        raise HTTPException(503, "updater_missing")
+    updates.request_update(settings.updater_dir, found["latest"]["version"])
+    return {"ok": True, "version": found["latest"]["version"]}
+
+
+@api.put("/system/banking", dependencies=[Depends(admin_only)])
+async def set_banking(
+    body: BankAccess, request: Request, db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """Enable Banking app id + private key, checked before saving."""
+    try:
+        await EnableBanking(body.app_id.strip(), body.private_key.strip()).check()
+    except ProviderError as exc:
+        raise fail(422, exc) from exc
+    except ValueError as exc:  # a key PyJWT cannot read
+        raise HTTPException(422, "key_invalid") from exc
+    save_banking(db, settings_of(request), body.app_id, body.private_key.strip() + "\n")
+    return {"ok": True}

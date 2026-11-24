@@ -2,59 +2,82 @@
 
 **Self-hosted personal finance with real glass and an AI that does the boring part.**
 
-Oink keeps all your money in one place (bank accounts, cards, cash, savings) on your own
-server. It syncs your bank automatically where it can, asks you for a statement where it
-can't, sorts every movement into a category, spots subscriptions that quietly got more
-expensive, and writes you a short report with advice at the start of each month. Any AI
-provider works, or none at all.
+Oink keeps all your money in one place (bank accounts, cards, cash, savings, crypto) on your
+own server, for you and the people you invite. It syncs your bank automatically where it
+can, reads exchanges and wallets with a read-only key, asks you for a statement where
+nothing can be linked, sorts every movement into a category, spots subscriptions that
+quietly got more expensive, and writes you a short report with advice at the start of each
+month. Any AI provider works, or none at all.
 
 <p align="center">
   <img src="docs/home.jpg" width="62%" alt="Oink home: net worth, balance chart, monthly spending">
-  <img src="docs/accounts-mobile.jpg" width="26%" alt="Oink accounts on a phone">
+  <img src="docs/activity-mobile.jpg" width="26%" alt="Oink activity on a phone">
 </p>
-
-> The interface is in Italian for now; translations are welcome.
 
 ## What it does
 
-- **All accounts in one view**: net worth, balance over time, income and spending per month,
-  where the money goes, and how this month compares to your usual.
-- **Bank sync over PSD2** through [Enable Banking](https://enablebanking.com): free for
-  linking your *own* accounts, and it covers 2,500+ European banks. Consents last up to 180 days.
-- **Statements for everything else**: drop a CSV export or a PDF. CSVs from Italian and
-  European banks are read directly; PDFs and unusual layouts are read by the AI. Duplicates are
-  skipped, so uploading the same file twice is harmless.
-- **A monthly reminder**: on the 1st, every account without a bank link asks for last month's
-  statement, and the request closes by itself when you upload it.
-- **Categories that learn**: correct a category once and Oink remembers it for that merchant.
-  Whatever is left can be sorted by the AI.
-- **Subscriptions and bills**: recurring payments are found automatically, and price
-  increases are flagged.
-- **AI reports and questions**: a monthly report with three concrete tips, plus a box to ask
-  things like «can I afford a trip in March?». The numbers are computed by Oink; the AI only
-  puts them into words.
+- **Everyone gets their own Oink.** The first account is the admin; invite others with a
+  one-time link. Each person's accounts, movements and reports are private.
+- **Every currency, crypto included.** Accounts can be in EUR, USD, GBP, JPY… or BTC, ETH,
+  SOL and friends. Totals and reports are converted to your main currency with free
+  exchange rates (ECB for fiat, CoinGecko for crypto).
+- **Link what can be linked, in one tap:**
+  - **Banks** over PSD2 through [Enable Banking](https://enablebanking.com): 2,500+ European
+    banks, free for your *own* accounts. Pick your bank, log in there, done.
+  - **Exchanges** with a read-only API key: Kraken, Binance.
+  - **Wise** with a personal API token (balances in every currency).
+  - **Wallets** by public address: Bitcoin (balance and movements), Ethereum. No keys.
+- **Statements for everything else.** Drop a CSV, OFX/QFX or PDF: the IBAN printed on it picks
+  the account by itself. CSVs of European banks are read directly, PDFs by the AI or, without
+  AI, by a line parser. Duplicates are skipped. You can also drop files in an inbox folder
+  (`data/inbox/<username>/`) and Oink imports them every few minutes.
+- **A monthly reminder**: on the 1st, every account without a link asks for last month's
+  statement, and the request closes itself when the statement arrives.
+- **Categories that learn**, each with its own icon: correct one once and Oink remembers it
+  for that merchant. Whatever is left can be sorted by the AI.
+- **Subscriptions and bills** are found automatically; price increases are flagged.
+- **AI reports and questions**: a monthly report with three concrete tips, and a box to ask
+  things like «can I afford a trip in March?». Oink computes the numbers; the AI only puts
+  them into words.
 - **An API for your other apps** with scoped tokens (read and write are separate), so an
-  assistant can read your spending without being able to change anything.
-  Docs at `/api/docs`.
+  assistant can read your spending without being able to change anything. Docs at `/api/docs`.
+- **Updates in one click**: when a new release is out, the admin sees it and can press
+  *Install and restart*. The database migrates itself.
+- **English, Italiano, Deutsch, Français, Español**: your device's language by default.
 
 ## Design
 
-Oink is meant to feel like an Apple app. The glass bends what is behind it, it doesn't just
-blur it. Each `Glass` surface uses an SVG displacement map that is strong at the rim and flat
-in the centre, with a slight chromatic fringe, applied through `backdrop-filter`. On top of that
-sit a specular highlight that follows your finger and a lit rim. Browsers that can't run SVG
-filters in `backdrop-filter` (Safari and Firefox today) get the frosted version instead.
-Everything moves on springs (framer-motion), and it all respects *reduce motion*.
+Oink is meant to feel like an Apple app, on a phone first. The glass bends what is behind it,
+it doesn't just blur it: each `Glass` surface uses an SVG displacement map that is strong at
+the rim and flat in the centre, with a slight chromatic fringe, applied through
+`backdrop-filter`. On top sit a specular highlight that follows your finger and a lit rim.
+Browsers that can't run SVG filters in `backdrop-filter` (Safari and Firefox today) get the
+frosted version. Everything moves on springs (framer-motion) and respects *reduce motion*.
+Add it to your home screen: it runs full screen like an app.
 
 ## Run it
 
 ```bash
-cp .env.example .env        # set OINK_PUBLIC_URL, and optionally AI and bank keys
+mkdir oink && cd oink
+curl -O https://raw.githubusercontent.com/Peppe37/oink/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/Peppe37/oink/main/.env.example
 docker compose up -d        # http://localhost:8080
 ```
 
-On first open you choose the password; alternatively set `OINK_ADMIN_PASSWORD`.
-Data lives in `./data` (SQLite). Back that folder up.
+Open it and create the first account (or set `OINK_ADMIN_PASSWORD` in `.env`). Data live in
+`./data` (SQLite, plus the key that encrypts API keys of linked accounts): back that folder
+up and keep the backups private.
+
+### One-click updates (optional)
+
+```bash
+docker compose --profile updater up -d
+```
+
+starts a tiny sidecar that, when the admin presses *Install and restart*, pulls the new image
+and recreates the Oink container. It needs the Docker socket, which is root-equivalent on the
+host: if you'd rather not, leave it off and update with `docker compose pull && docker compose
+up -d` when the app tells you a version is out.
 
 ### AI (optional)
 
@@ -69,22 +92,24 @@ add that provider's usual key:
 | Ollama (local) | `ollama/llama3.1` | `OINK_AI_BASE_URL=http://ollama:11434` |
 
 Privacy: with `OINK_AI_SEND_DESCRIPTIONS=false` only totals per category are sent: no
-descriptions, no merchant names. PDF reading and AI categories need descriptions, so they
-are off in that mode.
+descriptions, no merchant names. PDF reading by the AI and AI categories need descriptions,
+so they are off in that mode (PDFs are then read by the line parser).
 
 ### Bank sync (optional)
 
-1. Create an account at [enablebanking.com](https://enablebanking.com), then an application
-   in *restricted production* (personal use: only accounts you link yourself).
-2. Register `https://<your OINK_PUBLIC_URL>/api/banks/callback` as a redirect URL.
-3. Save the private key as `data/enablebanking.pem` and set `OINK_ENABLE_BANKING_APP_ID`.
-4. In Oink: **Altro → Banche collegate**, search for your bank, then log in on your bank's page.
+The admin does this once, in the app: **Settings → Bank access**.
 
-Oink then syncs every `OINK_SYNC_HOURS` (6 by default).
+1. Create an account at [enablebanking.com](https://enablebanking.com), then an application in
+   *restricted production* (personal use: only accounts you link yourselves).
+2. Register the redirect URL the app shows you (`<OINK_PUBLIC_URL>/api/connections/callback`).
+3. Paste the application ID and the private key. Oink checks them before saving.
+
+From then on everyone links their banks from **Accounts → Add account → Bank**. Consents last
+up to 180 days; Oink syncs every `OINK_SYNC_HOURS` (6 by default).
 
 ## Connect another app (e.g. an AI assistant)
 
-Go to **Altro → App collegate**, create a token, and tick only the scopes the app needs:
+Go to **Settings → Connected apps**, create a token, and tick only the scopes the app needs:
 
 | Scope | Allows |
 | --- | --- |
@@ -94,23 +119,28 @@ Go to **Altro → App collegate**, create a token, and tick only the scopes the 
 | `requests:read` / `requests:write` | see / skip the monthly statement requests |
 | `reports:read` / `reports:write` | read statistics and reports / generate AI reports |
 | `ai:ask` | ask the AI about your finances |
-| `banks:read` / `banks:write` | see bank links / trigger a sync |
+| `connections:read` / `connections:write` | see linked banks and wallets / start a sync |
 
-Then call the API with `Authorization: Bearer oink_…`. A few useful endpoints:
-`GET /api/reports/overview`, `GET /api/requests`, `POST /api/imports` (multipart:
-`account_id`, `file`), `POST /api/ask`. Connecting a bank is only possible from the owner's
-browser, and tokens can never create other tokens.
+Then call the API with `Authorization: Bearer oink_…`. A token acts for the user who made it.
+Amounts are exact decimal strings in the account's currency (`"-12.50"`, `"0.00031250"`);
+reports are numbers in the user's main currency. A few useful endpoints:
+`GET /api/reports/overview`, `GET /api/requests`, `POST /api/imports` (multipart: `file`,
+optional `account_id`), `POST /api/ask`. Linking a bank or a key, managing tokens and people
+are only possible from a signed-in browser.
 
 ## Development
 
 ```bash
-cd backend && uv sync && uv run pytest -q          # API (FastAPI, SQLite, SQLAlchemy)
-OINK_DATA_DIR=/tmp/oink uv run python -m oink.demo  # eight months of demo data
-OINK_DATA_DIR=/tmp/oink OINK_ADMIN_PASSWORD=demo-password uv run oink
+cd backend && uv sync && uv run pytest -q          # API (FastAPI, SQLite, SQLAlchemy, Alembic)
+OINK_DATA_DIR=/tmp/oink uv run python -m oink.demo  # demo user «demo» / «demo-password»
+OINK_DATA_DIR=/tmp/oink uv run oink
 cd frontend && npm install && npm run dev          # web app (React, Vite), proxies /api
 ```
 
 Checks: `uv run ruff check src tests && uv run mypy src && uv run pytest -q` and `npm run build`.
+A schema change ships an Alembic revision in `backend/src/oink/migrations/versions`.
+Translations live in `frontend/src/i18n/`: copy `en.ts`, translate, and add it to `LANGUAGES`.
+Releases: push a `vX.Y.Z` tag; the image goes to `ghcr.io/peppe37/oink`.
 
 ## Similar projects
 
