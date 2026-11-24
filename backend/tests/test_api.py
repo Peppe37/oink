@@ -210,16 +210,18 @@ def test_system_and_updates_are_admin_only(owner: TestClient, second: TestClient
 def test_an_oink_0_1_database_is_set_aside(tmp_path: Path) -> None:
     old = sqlite3.connect(tmp_path / "oink.db")
     old.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+    from oink.core.security import hash_password
+
+    old.execute(
+        "INSERT INTO settings VALUES ('owner_password', ?)", (hash_password("vecchia-password-01"),)
+    )
     old.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT)")
     old.commit()
     old.close()
-    settings = Settings(data_dir=tmp_path, admin_password="una-password-lunga", update_check=False,
+    settings = Settings(data_dir=tmp_path, admin_username="Giuseppe", update_check=False,
                         enable_banking_key_file=tmp_path / "x")  # fmt: skip
     with TestClient(create_app(settings, background=False), base_url="https://t") as c:
-        assert (
-            c.post(
-                "/api/auth/login", json={"username": "admin", "password": "una-password-lunga"}
-            ).status_code
-            == 200
-        )
+        login = {"username": "giuseppe", "password": "vecchia-password-01"}
+        assert c.post("/api/auth/login", json=login).status_code == 200
+        assert c.get("/api/me").json()["is_admin"]
     assert (tmp_path / "oink-0.1.db.bak").is_file()

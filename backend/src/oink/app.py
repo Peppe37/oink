@@ -37,7 +37,7 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     settings = settings or get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     db = Database(settings.db_url)
-    db.create()
+    db.create(settings.admin_username)
     vault = Vault(settings.secret_key, settings.data_dir)
     with db.sessions() as session:
         if user_count(session) == 0 and settings.admin_password:

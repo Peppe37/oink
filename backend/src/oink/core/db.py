@@ -249,11 +249,11 @@ class Database:
             event.listen(self.engine, "connect", _sqlite_pragmas)
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
 
-    def create(self) -> None:
+    def create(self, admin_username: str = "admin") -> None:
         """Bring the schema to the latest version (Alembic), keeping the data."""
         from oink.core.migrate import upgrade
 
-        upgrade(self.engine)
+        upgrade(self.engine, admin_username)
 
     def session(self) -> Iterator[Session]:
         with self.sessions() as session:
