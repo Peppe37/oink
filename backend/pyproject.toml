@@ -1,6 +1,6 @@
 [project]
 name = "oink"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-hosted personal finance with AI reports and a real glass UI."
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -16,6 +16,8 @@ dependencies = [
     "pyjwt[crypto]>=2.9",
     "pypdf>=5.1",
     "litellm>=1.52",
+    "alembic>=1.20.1",
+    "cryptography>=50.0.2",
 ]
 
 [project.scripts]
@@ -52,3 +54,5 @@ plugins = ["pydantic.mypy"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/oink/demo.py" = ["E501"]
+"tests/*" = ["E501"]
+"src/oink/migrations/*" = ["E501"]

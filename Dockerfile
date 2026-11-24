@@ -7,8 +7,12 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM python:3.12-slim AS app
+ARG VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/Peppe37/oink" \
+      org.opencontainers.image.description="Self-hosted personal finance" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 \
-    OINK_DATA_DIR=/data OINK_STATIC_DIR=/app/static PORT=8080
+    OINK_DATA_DIR=/data OINK_STATIC_DIR=/app/static PORT=8080 OINK_VERSION=${VERSION}
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./

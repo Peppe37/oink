@@ -1,46 +1,121 @@
+/* Sign in, first run (creates the admin) and accepting an invite. */
+
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
 import { Glass } from "../glass/Glass";
-import { Pig } from "../ui/bits";
+import { LANGUAGES, deviceLanguage, useErrorText, useI18n, type Lang } from "../i18n";
+import { Field, Pig, Spinner } from "../ui/bits";
 
-export function Login({ firstRun, onDone }: { firstRun: boolean; onDone: () => void }) {
+const COMMON = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "PLN", "CZK"];
+
+function Card({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  const { t } = useI18n();
+  return (
+    <div className="center">
+      <Glass refract strength={46} className="card auth" initial={{ opacity: 0, y: 30, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 22 }}>
+        <div className="auth-head">
+          <Pig size={64} />
+          <h1 className="title">{title}</h1>
+          <p className="muted">{hint ?? t("app.tagline")}</p>
+        </div>
+        {children}
+      </Glass>
+    </div>
+  );
+}
+
+export function Login({ firstRun, onDone, onLanguage }: { firstRun: boolean; onDone: () => void; onLanguage: (l: Lang) => void }) {
+  const { t, lang } = useI18n();
+  const errorText = useErrorText();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [currency, setCurrency] = useState("EUR");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      await (firstRun ? api.setup(password) : api.login(password));
+      if (firstRun) await api.setup({ username, password, language: lang === deviceLanguage() ? "" : lang, base_currency: currency });
+      else await api.login(username, password);
       onDone();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Errore");
+    } catch (err) {
+      setError(errorText(err));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="center">
-      <Glass refract strength={52} className="card" style={{ width: "min(420px, 100%)", padding: 32 }}
-        initial={{ opacity: 0, y: 30, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 22 }}>
-        <form onSubmit={submit} style={{ display: "grid", gap: 18 }}>
-          <div className="row" style={{ gap: 14 }}>
-            <Pig size={52} />
-            <div>
-              <h1 className="title" style={{ fontSize: 30 }}>Oink</h1>
-              <div className="muted">{firstRun ? "Scegli la password del tuo salvadanaio" : "Bentornato"}</div>
-            </div>
+    <Card title={firstRun ? t("auth.setupTitle") : "Oink"} hint={firstRun ? t("auth.setupHint") : undefined}>
+      <form onSubmit={submit} className="stack">
+        <Field label={t("auth.username")}>
+          <input className="field" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required />
+        </Field>
+        <Field label={t("auth.password")} hint={firstRun ? t("auth.passwordHint") : undefined}>
+          <input className="field" type="password" autoComplete={firstRun ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </Field>
+        {firstRun && (
+          <div className="two">
+            <Field label={t("auth.language")}>
+              <select className="field" value={lang} onChange={(e) => onLanguage(e.target.value as Lang)}>
+                {Object.entries(LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+            </Field>
+            <Field label={t("auth.baseCurrency")}>
+              <select className="field" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                {COMMON.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </Field>
           </div>
-          <input className="field" type="password" autoFocus autoComplete={firstRun ? "new-password" : "current-password"}
-            placeholder={firstRun ? "Almeno 10 caratteri" : "Password"} value={password} onChange={(e) => setPassword(e.target.value)} />
-          {error && <motion.div initial={{ x: -8 }} animate={{ x: [8, -6, 4, 0] }} className="down">{error}</motion.div>}
-          <button className="btn" disabled={busy || password.length < (firstRun ? 10 : 1)}>{firstRun ? "Inizia" : "Entra"}</button>
+        )}
+        {error && <motion.div className="error" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>{error}</motion.div>}
+        <button className="btn big-btn" disabled={busy}>{busy ? <Spinner /> : firstRun ? t("auth.create") : t("auth.signIn")}</button>
+      </form>
+    </Card>
+  );
+}
+
+export function Invite({ token, onDone }: { token: string; onDone: () => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [who, setWho] = useState<{ username: string; name: string } | null>(null);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.invite(token).then(setWho).catch((e) => setError(errorText(e))); }, [token, errorText]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.acceptInvite(token, password);
+      window.history.replaceState(null, "", "/");
+      onDone();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title={who ? t("auth.inviteTitle", { name: who.name || who.username }) : "Oink"} hint={who ? t("auth.inviteHint") : undefined}>
+      {who ? (
+        <form onSubmit={submit} className="stack">
+          <Field label={t("auth.username")}><input className="field" value={who.username} readOnly autoComplete="username" /></Field>
+          <Field label={t("auth.password")} hint={t("auth.passwordHint")}>
+            <input className="field" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
+          </Field>
+          {error && <div className="error">{error}</div>}
+          <button className="btn big-btn" disabled={busy}>{busy ? <Spinner /> : t("auth.start")}</button>
         </form>
-      </Glass>
-    </div>
+      ) : (
+        <div className="error">{error || t("common.loading")}</div>
+      )}
+    </Card>
   );
 }

@@ -1,183 +1,167 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { api, catStyle, eur, monthName, type Overview, type Report } from "../api";
-import { Glass } from "../glass/Glass";
-import { AreaChart, Bars, Donut } from "../ui/charts";
-import { Money, Pig, rise, stagger } from "../ui/bits";
 import ReactMarkdown from "react-markdown";
+import { Link } from "react-router-dom";
+import { api, type Overview, type Report, type User } from "../api";
+import { Glass } from "../glass/Glass";
+import { useErrorText, useI18n } from "../i18n";
+import { AreaChart, Bars, Donut } from "../ui/charts";
+import { Empty, Money, PageHeader, Pig, rise, stagger } from "../ui/bits";
+import { CategoryTile, Icon } from "../ui/icons";
+import { categoryLabel } from "../ui/labels";
 
-export function Home() {
+export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
   const [data, setData] = useState<Overview | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.overview().then(setData).catch((e) => setError(e.message));
+    api.overview().then(setData).catch((e) => setError(errorText(e)));
     api.reports().then((r) => setReport(r[0] ?? null)).catch(() => undefined);
-  }, []);
+  }, [errorText]);
 
-  if (error) return <div className="page"><Glass className="card">{error}</Glass></div>;
+  const hour = new Date().getHours();
+  const greeting = t(hour < 12 ? "home.morning" : hour < 18 ? "home.afternoon" : "home.evening");
+  const subtitle = fmt.date(new Date().toISOString(), { weekday: "long", day: "numeric", month: "long" });
+
+  if (error) return <div className="page"><Glass className="card error">{error}</Glass></div>;
   if (!data) return <HomeSkeleton />;
 
+  const cur = data.currency;
   const month = data.month.current;
-  const usual = data.month.usual_spending_cents;
-  const delta = usual ? month.spending_cents - usual : null;
-  const first = data.balance[0]?.cents ?? 0;
-  const trend = data.net_worth.total_cents - first;
+  const usual = data.month.usual_spending;
+  const delta = usual !== null ? month.spending - usual : null;
+  const first = data.balance[0]?.value ?? 0;
+  const trend = data.net_worth.total - first;
   const categories = Object.entries(month.by_category) as [string, number][];
-  const movers = Object.entries(data.month.categories).filter(([, c]) => Math.abs(c.delta_cents) > 1000).slice(0, 4);
+  const movers = Object.entries(data.month.categories).filter(([, c]) => Math.abs(c.delta) >= 10).slice(0, 4);
+  const empty = data.net_worth.accounts.length === 0;
 
   return (
     <motion.div className="page" variants={stagger} initial="hidden" animate="show">
-      <motion.div variants={rise} className="header">
-        <div>
-          <div className="muted" style={{ textTransform: "capitalize" }}>{new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}</div>
-          <h1 className="title">Il tuo salvadanaio</h1>
-        </div>
-        <Pig />
-      </motion.div>
+      <PageHeader title={`${greeting}, ${user.name || user.username}`} subtitle={<span className="cap">{subtitle}</span>} action={<Pig />} />
 
-      {data.open_requests > 0 && (
+      {empty && (
         <motion.div variants={rise}>
-          <Glass className="banner" variant="tight">
-            <span>📬 {data.open_requests === 1 ? "Un conto aspetta" : `${data.open_requests} conti aspettano`} l'estratto conto del mese scorso.</span>
-            <Link to="/conti" className="btn ghost" style={{ textDecoration: "none", padding: "8px 14px" }}>Carica</Link>
+          <Glass refract className="card">
+            <Empty icon="savings" title={t("home.emptyTitle")} hint={t("home.emptyHint")}
+              action={<button className="btn" onClick={onAdd}><Icon name="plus" size={18} /> {t("home.emptyCta")}</button>} />
           </Glass>
         </motion.div>
       )}
 
-      <div className="grid">
-        <motion.div variants={rise} className="span-7">
-          <Glass refract strength={42} className="card" style={{ minHeight: 300 }}>
-            <h3>Patrimonio</h3>
-            <div className="big"><Money cents={data.net_worth.total_cents} /></div>
-            <div className={`num ${trend >= 0 ? "up" : "down"}`} style={{ margin: "8px 0 18px", fontWeight: 600 }}>
-              {trend >= 0 ? "▲" : "▼"} {eur(Math.abs(trend))} negli ultimi 6 mesi
-            </div>
-            <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1)} />
+      {data.open_requests > 0 && (
+        <motion.div variants={rise}>
+          <Glass className="banner" variant="tight">
+            <span className="row" style={{ gap: 10 }}><Icon name="inbox" /> {t("home.requests", { count: data.open_requests })}</span>
+            <Link to="/accounts" className="btn ghost small">{t("home.upload")}</Link>
           </Glass>
         </motion.div>
+      )}
 
-        <motion.div variants={rise} className="span-5" style={{ display: "grid", gap: 18 }}>
-          <Glass className="card">
-            <h3>Speso a {monthName(month.month).split(" ")[0]}</h3>
-            <div style={{ fontSize: 40, fontWeight: 800, letterSpacing: "-0.04em" }}><Money cents={month.spending_cents} /></div>
-            {delta !== null && (
-              <div className={`num ${delta <= 0 ? "up" : "down"}`} style={{ marginTop: 6, fontWeight: 600 }}>
-                {delta <= 0 ? `${eur(-delta)} meno del solito` : `${eur(delta)} più del solito`}
+      {!empty && (
+        <div className="grid">
+          <motion.div variants={rise} className="span-7">
+            <Glass refract strength={42} className="card hero">
+              <h3>{t("home.netWorth")}</h3>
+              <div className="big"><Money value={data.net_worth.total} currency={cur} /></div>
+              <div className={`num trend ${trend >= 0 ? "up" : "down"}`}>
+                <Icon name={trend >= 0 ? "arrowUp" : "arrowDown"} size={16} stroke={2.2} />
+                {t("home.trend", { amount: fmt.money(Math.abs(trend), cur) })}
               </div>
-            )}
-            <SpendBar spent={month.spending_cents} usual={usual} />
-          </Glass>
-          <Glass className="card">
-            <h3>Entrate del mese</h3>
-            <div className="row between">
-              <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.03em" }}><Money cents={month.income_cents} /></div>
-              {month.saving_rate !== null && (
-                <div className="chip on num" title="Quota delle entrate che resta">risparmi {Math.round(month.saving_rate * 100)}%</div>
+              {data.net_worth.missing_rates.length > 0 && <p className="faint small-text">{t("home.missingRates", { codes: data.net_worth.missing_rates.join(", ") })}</p>}
+              <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1)} currency={cur} />
+            </Glass>
+          </motion.div>
+
+          <motion.div variants={rise} className="span-5">
+            <Glass className="card month">
+              <h3>{t("home.thisMonth")}</h3>
+              <div className="stat">
+                <span className="muted">{t("home.spent")}</span>
+                <span className="mid"><Money value={month.spending} currency={cur} /></span>
+              </div>
+              <div className={`pill-note ${delta === null ? "" : delta > 0 ? "down" : "up"}`}>
+                {delta === null || Math.abs(delta) < 1 ? t("home.asUsual")
+                  : delta > 0 ? t("home.aboveUsual", { amount: fmt.money(delta, cur, { compact: true }) })
+                    : t("home.belowUsual", { amount: fmt.money(-delta, cur, { compact: true }) })}
+              </div>
+              <div className="two stats">
+                <div className="stat"><span className="muted">{t("home.earned")}</span><span className="num up strong"><Money value={month.income} currency={cur} compact /></span></div>
+                <div className="stat"><span className="muted">{t("home.saved")}</span><span className={`num strong ${month.net >= 0 ? "up" : "down"}`}><Money value={month.net} currency={cur} compact /></span></div>
+              </div>
+              {movers.length > 0 && (
+                <div className="movers">
+                  <span className="faint small-text">{t("home.movers")}</span>
+                  {movers.map(([cat, c]) => (
+                    <div key={cat || "none"} className="row between">
+                      <span className="row" style={{ gap: 8, minWidth: 0 }}><CategoryTile category={cat} size={24} /><span className="ellipsis">{categoryLabel(t, cat)}</span></span>
+                      <span className={`num ${c.delta > 0 ? "down" : "up"}`}>{fmt.money(c.delta, cur, { sign: true, compact: true })}</span>
+                    </div>
+                  ))}
+                </div>
               )}
-            </div>
-          </Glass>
-        </motion.div>
+            </Glass>
+          </motion.div>
 
-        <motion.div variants={rise} className="span-6">
-          <Glass className="card" style={{ height: "100%" }}>
-            <h3>Dove vanno i soldi</h3>
-            {categories.length ? <Donut data={categories} total={month.spending_cents} /> : <Empty text="Nessuna spesa questo mese." />}
-          </Glass>
-        </motion.div>
-
-        <motion.div variants={rise} className="span-6">
-          <Glass className="card" style={{ height: "100%" }}>
-            <h3>Ultimi 12 mesi</h3>
-            <Bars data={data.series} />
-          </Glass>
-        </motion.div>
-
-        {movers.length > 0 && (
           <motion.div variants={rise} className="span-6">
             <Glass className="card">
-              <h3>Rispetto al solito</h3>
-              <div className="list">
-                {movers.map(([name, c]) => (
-                  <div key={name} className="item">
-                    <div className="dot" style={{ background: `${catStyle(name).color}26` }}>{catStyle(name).emoji}</div>
-                    <div style={{ flex: 1 }}><span style={{ textTransform: "capitalize" }}>{name}</span><div className="faint num" style={{ fontSize: 13 }}>di solito {eur(c.usual_cents, { compact: true })}</div></div>
-                    <div className={`num ${c.delta_cents > 0 ? "down" : "up"}`} style={{ fontWeight: 600 }}>{eur(c.delta_cents, { sign: true, compact: true })}</div>
-                  </div>
-                ))}
-              </div>
+              <h3>{t("home.whereMoney")}</h3>
+              {categories.length ? <Donut data={categories} total={month.spending} currency={cur} /> : <p className="faint">{t("movements.empty")}</p>}
             </Glass>
           </motion.div>
-        )}
 
-        <motion.div variants={rise} className={movers.length ? "span-6" : "span-12"}>
-          <Glass className="card">
-            <h3>Abbonamenti e ricorrenti</h3>
-            {data.recurring.length ? (
-              <div className="list">
-                {data.recurring.slice(0, 6).map((r) => (
-                  <div key={r.name} className="item">
-                    <div className="dot" style={{ background: `${catStyle(r.category).color}26` }}>{catStyle(r.category || "abbonamenti").emoji}</div>
-                    <div className="ellipsis" style={{ flex: 1 }}>{r.name}{r.increased && <span className="chip" style={{ marginLeft: 8, color: "var(--warn)" }}>aumentato</span>}</div>
-                    <div className="num">{eur(r.monthly_cents)}<span className="faint">/mese</span></div>
-                  </div>
-                ))}
-                <div className="item faint" style={{ justifyContent: "space-between" }}>
-                  <span>Totale all'anno</span>
-                  <span className="num">{eur(data.recurring.reduce((s, r) => s + r.monthly_cents, 0) * 12, { compact: true })}</span>
-                </div>
-              </div>
-            ) : <Empty text="Li trovo da soli dopo qualche mese di movimenti." />}
-          </Glass>
-        </motion.div>
-
-        {report && (
-          <motion.div variants={rise} className="span-12">
+          <motion.div variants={rise} className="span-6">
             <Glass className="card">
-              <div className="row between"><h3>Il resoconto di {monthName(report.month)}</h3><Link to="/resoconti" className="faint">tutti →</Link></div>
-              <div className="md" style={{ maxHeight: 260, overflow: "hidden", maskImage: "linear-gradient(#000 70%, transparent)" }}>
-                <ReactMarkdown>{report.content}</ReactMarkdown>
-              </div>
+              <h3>{t("home.incomeSpending")}</h3>
+              <Bars data={data.series} currency={cur} />
             </Glass>
           </motion.div>
-        )}
-      </div>
+
+          {data.recurring.length > 0 && (
+            <motion.div variants={rise} className="span-6">
+              <Glass className="card">
+                <h3>{t("home.subscriptions")}</h3>
+                <div className="list">
+                  {data.recurring.slice(0, 7).map((r) => (
+                    <div key={r.name} className="item">
+                      <CategoryTile category={r.category} size={36} />
+                      <span className="row-text">
+                        <span className="row-title ellipsis">{r.name}</span>
+                        {r.increased && <span className="row-detail down">{t("home.increased")}</span>}
+                      </span>
+                      <span className="num">{t("home.perMonth", { amount: fmt.money(r.monthly, cur) })}</span>
+                    </div>
+                  ))}
+                </div>
+              </Glass>
+            </motion.div>
+          )}
+
+          {report && (
+            <motion.div variants={rise} className={data.recurring.length ? "span-6" : "span-12"}>
+              <Glass className="card">
+                <div className="row between"><h3>{t("home.latestReport")}</h3><span className="faint cap small-text">{fmt.month(report.month)}</span></div>
+                <div className="md clamp"><ReactMarkdown>{report.content}</ReactMarkdown></div>
+                <Link to="/insights" className="link">{t("nav.reports")} <Icon name="chevron" size={14} /></Link>
+              </Glass>
+            </motion.div>
+          )}
+        </div>
+      )}
     </motion.div>
   );
-}
-
-function SpendBar({ spent, usual }: { spent: number; usual: number | null }) {
-  if (!usual) return null;
-  const pct = Math.min(1.4, spent / usual);
-  const day = new Date();
-  const monthPct = day.getDate() / new Date(day.getFullYear(), day.getMonth() + 1, 0).getDate();
-  return (
-    <div style={{ marginTop: 16 }}>
-      <div style={{ position: "relative", height: 10, borderRadius: 99, background: "var(--line)", overflow: "visible" }}>
-        <motion.div initial={{ width: 0 }} animate={{ width: `${(pct / 1.4) * 100}%` }} transition={{ type: "spring", stiffness: 120, damping: 20, delay: 0.3 }}
-          style={{ height: "100%", borderRadius: 99, background: pct > monthPct + 0.1 ? "linear-gradient(90deg,var(--peach),var(--down))" : "linear-gradient(90deg,var(--mint),var(--pink-2))" }} />
-        <div title="Il solito" style={{ position: "absolute", left: `${(1 / 1.4) * 100}%`, top: -4, bottom: -4, width: 2, background: "var(--fg-2)", borderRadius: 2 }} />
-      </div>
-      <div className="row between faint" style={{ fontSize: 12, marginTop: 6 }}>
-        <span>siamo al {Math.round(monthPct * 100)}% del mese</span><span>il solito: {eur(usual, { compact: true })}</span>
-      </div>
-    </div>
-  );
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="faint" style={{ padding: "18px 0" }}>{text}</div>;
 }
 
 function HomeSkeleton() {
   return (
     <div className="page">
-      <div className="skeleton" style={{ height: 60, width: 280 }} />
+      <div className="skeleton" style={{ height: 56, width: "60%" }} />
       <div className="grid">
-        <div className="span-7 skeleton" style={{ height: 300, borderRadius: 28 }} />
-        <div className="span-5 skeleton" style={{ height: 300, borderRadius: 28 }} />
+        <div className="span-7 skeleton" style={{ height: 320 }} />
+        <div className="span-5 skeleton" style={{ height: 320 }} />
       </div>
     </div>
   );

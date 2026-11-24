@@ -1,8 +1,9 @@
-"""Enable Banking: PSD2 access to European banks, free for linking your own accounts.
+"""Enable Banking: PSD2 access to 2,500+ European banks, free for linking your own accounts.
 
-Setup: create an application at https://enablebanking.com (restricted production for
-personal use), register `<OINK_PUBLIC_URL>/api/banks/callback` as redirect URL, download the
-private key to `OINK_ENABLE_BANKING_KEY_FILE` and set `OINK_ENABLE_BANKING_APP_ID`.
+The instance needs ONE application (the admin sets it up once, in the app or in .env):
+create it at https://enablebanking.com (restricted production), register
+`<OINK_PUBLIC_URL>/api/connections/callback` as redirect URL, and give Oink the app id and
+private key. Then every user links banks by just picking theirs and logging in there.
 Each request is signed with a short-lived RS256 JWT (the app id is the key id).
 """
 
@@ -15,14 +16,15 @@ from typing import Any
 import httpx
 import jwt
 
-from oink.services.ledger import NewMovement, to_cents
+from oink.core.money import MoneyError, to_minor
+from oink.providers.base import ProviderError, RemoteAccount
+from oink.services.ledger import NewMovement
 
 API = "https://api.enablebanking.com"
 CONSENT_DAYS = 180
-
-
-class BankError(RuntimeError):
-    pass
+COUNTRIES = ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR",
+             "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO", "PL",
+             "PT", "RO", "SE", "SI", "SK"]  # fmt: skip
 
 
 class EnableBanking:
@@ -52,13 +54,19 @@ class EnableBanking:
                 method, API + path, headers={"Authorization": f"Bearer {self._token()}"}, **kwargs
             )
         except httpx.HTTPError as exc:
-            raise BankError(f"Enable Banking non raggiungibile: {type(exc).__name__}") from exc
+            raise ProviderError(f"unreachable: {type(exc).__name__}") from exc
         finally:
             if self._client is None:
                 await client.aclose()
+        if response.status_code in (401, 403):
+            raise ProviderError("credentials_rejected")
         if response.status_code >= 400:
-            raise BankError(f"Enable Banking {response.status_code}: {response.text[:200]}")
+            raise ProviderError(f"http_{response.status_code}")
         return response.json()
+
+    async def check(self) -> None:
+        """Raises when the app id or key is wrong."""
+        await self._call("GET", "/application")
 
     async def banks(self, country: str) -> list[dict[str, Any]]:
         data = await self._call("GET", "/aspsps", params={"country": country})
@@ -68,7 +76,7 @@ class EnableBanking:
         ]
 
     async def start(self, bank: str, country: str, state: str, redirect_url: str) -> str:
-        """The bank's login page the owner must open."""
+        """The bank's login page the user must open."""
         valid = (datetime.now(UTC) + timedelta(days=CONSENT_DAYS)).isoformat()
         data = await self._call(
             "POST",
@@ -84,25 +92,26 @@ class EnableBanking:
         return str(data["url"])
 
     async def finish(self, code: str) -> dict[str, Any]:
-        """{session_id, valid_until, accounts: [{uid, name, iban, currency}]}"""
+        """{session_id, valid_until, accounts: [RemoteAccount]}"""
         data = await self._call("POST", "/sessions", json={"code": code})
         accounts = []
         for acc in data.get("accounts", []):
             iban = (acc.get("account_id") or {}).get("iban") or ""
             accounts.append(
-                {
-                    "uid": acc["uid"],
-                    "iban": iban,
-                    "currency": acc.get("currency") or "EUR",
-                    "name": acc.get("name")
+                RemoteAccount(
+                    uid=acc["uid"],
+                    iban=iban,
+                    currency=acc.get("currency") or "EUR",
+                    name=acc.get("name")
                     or acc.get("product")
-                    or (f"Conto …{iban[-4:]}" if iban else "Conto"),
-                }
+                    or (f"…{iban[-4:]}" if iban else "Bank"),
+                    kind="card" if acc.get("cash_account_type") == "CARD" else "checking",
+                )
             )
         valid = (data.get("access") or {}).get("valid_until")
         return {"session_id": data["session_id"], "valid_until": valid, "accounts": accounts}
 
-    async def balance(self, uid: str) -> int | None:
+    async def balance(self, uid: str, currency: str) -> int | None:
         data = await self._call("GET", f"/accounts/{uid}/balances")
         balances = data.get("balances", [])
         preferred = ("CLBD", "ITBD", "ITAV", "XPCD", "CLAV")
@@ -113,12 +122,12 @@ class EnableBanking:
         )
         for b in balances:
             try:
-                return to_cents(str(b["balance_amount"]["amount"]))
-            except (KeyError, ValueError):
+                return to_minor(str(b["balance_amount"]["amount"]), currency)
+            except (KeyError, MoneyError):
                 continue
         return None
 
-    async def movements(self, uid: str, since: date) -> list[NewMovement]:
+    async def movements(self, uid: str, currency: str, since: date) -> list[NewMovement]:
         found: list[NewMovement] = []
         params: dict[str, str] = {"date_from": since.isoformat()}
         for _ in range(50):  # pages
@@ -126,7 +135,7 @@ class EnableBanking:
             for tx in data.get("transactions", []):
                 if tx.get("status") not in (None, "BOOK"):
                     continue  # pending ones change: wait until booked
-                movement = to_movement(tx)
+                movement = to_movement(tx, currency)
                 if movement is not None:
                     found.append(movement)
             key = data.get("continuation_key")
@@ -136,9 +145,9 @@ class EnableBanking:
         return found
 
 
-def to_movement(tx: dict[str, Any]) -> NewMovement | None:
+def to_movement(tx: dict[str, Any], currency: str) -> NewMovement | None:
     try:
-        amount = to_cents(str(tx["transaction_amount"]["amount"]))
+        amount = to_minor(str(tx["transaction_amount"]["amount"]), currency)
         day = date.fromisoformat(str(tx.get("booking_date") or tx.get("value_date"))[:10])
     except (KeyError, ValueError, TypeError):
         return None
@@ -152,9 +161,8 @@ def to_movement(tx: dict[str, Any]) -> NewMovement | None:
     description = " ".join(info) if isinstance(info, list) else str(info)
     return NewMovement(
         day=day,
-        amount_cents=amount,
-        description=description or party or "movimento",
+        amount=amount,
+        description=description or party or "—",
         counterparty=party,
-        currency=tx["transaction_amount"].get("currency", "EUR"),
         external_id=str(tx.get("entry_reference") or tx.get("transaction_id") or ""),
     )

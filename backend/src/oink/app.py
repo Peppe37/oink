@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from oink.api.routes import api
 from oink.core.config import Settings, get_settings
 from oink.core.db import Database
-from oink.core.security import owner_password, set_owner_password
-from oink.services import jobs
+from oink.core.security import Vault, create_user, user_count
+from oink.services import jobs, updates
 from oink.services.ai import AI
 
 STATIC = Path(
@@ -27,9 +27,9 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin",
-    "Content-Security-Policy": "default-src 'self'; img-src 'self' data: https:; style-src 'self' "
-    "'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
-    "connect-src 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data: https:; "
+    "style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+    "base-uri 'self'; form-action 'self'",
 }
 
 
@@ -38,14 +38,21 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     db = Database(settings.db_url)
     db.create()
+    vault = Vault(settings.secret_key, settings.data_dir)
     with db.sessions() as session:
-        if owner_password(session) is None and settings.admin_password:
-            set_owner_password(session, settings.admin_password)
+        if user_count(session) == 0 and settings.admin_password:
+            create_user(
+                session,
+                settings.admin_username,
+                settings.admin_password,
+                admin=True,
+                base_currency=settings.currency,
+            )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         task = (
-            asyncio.create_task(jobs.loop(db.sessions, settings, app.state.ai))
+            asyncio.create_task(jobs.loop(db.sessions, settings, app.state.ai, vault))
             if background
             else None
         )
@@ -55,12 +62,13 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
 
     app = FastAPI(
         title="Oink",
-        version="0.1.0",
+        version=updates.current_version(),
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
     )
     app.state.settings, app.state.db, app.state.ai = settings, db, AI(settings)
+    app.state.vault = vault
     app.include_router(api)
 
     @app.middleware("http")

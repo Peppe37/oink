@@ -1,37 +1,44 @@
 """Demo data: `python -m oink.demo` fills an EMPTY database with eight months of believable
-movements (for trying the app and for screenshots). Never touches a database with data."""
+movements for a user «demo» (password «demo-password»), with a USD card and some crypto,
+for trying the app and for screenshots. Never touches a database with data."""
 
 from __future__ import annotations
 
 import random
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select
 
 from oink.core.config import get_settings
-from oink.core.db import Account, Database, Report, Transaction
+from oink.core.db import Account, Database, Rate, Report, Transaction
+from oink.core.security import create_user
 from oink.services.ledger import NewMovement, add_movements
 
 FIXED = [  # (day, description, counterparty, cents, category)
-    (1, "AFFITTO APPARTAMENTO", "Immobiliare Bianchi", -65000, "casa"),
-    (3, "ADDEBITO SDD ENEL ENERGIA", "Enel Energia", -6800, "bollette"),
-    (5, "NETFLIX.COM", "Netflix", -1399, "abbonamenti"),
-    (7, "SPOTIFY P2F3A", "Spotify", -1199, "abbonamenti"),
-    (10, "ICLOUD+ APPLE.COM/BILL", "Apple", -299, "abbonamenti"),
-    (15, "PALESTRA MCFIT", "McFit", -2990, "svago"),
-    (27, "STIPENDIO", "ACME Srl", 210000, "stipendio"),
+    (1, "RENT APARTMENT", "Bianchi Homes", -65000, "home"),
+    (3, "DIRECT DEBIT ENEL ENERGIA", "Enel Energia", -6800, "bills"),
+    (5, "NETFLIX.COM", "Netflix", -1399, "subscriptions"),
+    (7, "SPOTIFY P2F3A", "Spotify", -1199, "subscriptions"),
+    (10, "ICLOUD+ APPLE.COM/BILL", "Apple", -299, "subscriptions"),
+    (15, "GYM MCFIT", "McFit", -2990, "leisure"),
+    (27, "SALARY", "ACME Ltd", 210000, "salary"),
 ]
 VARIABLE = [
-    ("PAGAMENTO POS ESSELUNGA", "Esselunga", (1800, 9500), "spesa", 7),
-    ("PAGAMENTO POS LIDL", "Lidl", (900, 4200), "spesa", 4),
-    ("PAGAMENTO POS PIZZERIA DA GINO", "Pizzeria da Gino", (1600, 4800), "ristoranti", 3),
-    ("SUSHI KO", "Sushi Ko", (2500, 6000), "ristoranti", 1),
-    ("BAR CENTRALE", "Bar Centrale", (120, 650), "ristoranti", 9),
-    ("TRENITALIA", "Trenitalia", (900, 4500), "trasporti", 2),
-    ("Q8 CARBURANTE", "Q8", (4000, 7000), "auto", 2),
+    ("POS ESSELUNGA", "Esselunga", (1800, 9500), "groceries", 7),
+    ("POS LIDL", "Lidl", (900, 4200), "groceries", 4),
+    ("POS PIZZERIA DA GINO", "Pizzeria da Gino", (1600, 4800), "restaurants", 3),
+    ("SUSHI KO", "Sushi Ko", (2500, 6000), "restaurants", 1),
+    ("BAR CENTRALE", "Bar Centrale", (120, 650), "restaurants", 9),
+    ("TRENITALIA", "Trenitalia", (900, 4500), "transport", 2),
+    ("Q8 FUEL", "Q8", (4000, 7000), "car", 2),
     ("AMAZON EU SARL", "Amazon", (900, 8900), "shopping", 3),
-    ("FARMACIA COMUNALE", "Farmacia Comunale", (500, 3500), "salute", 1),
-    ("CINEMA ODEON", "Cinema Odeon", (900, 2200), "svago", 1),
+    ("PHARMACY", "City Pharmacy", (500, 3500), "health", 1),
+    ("CINEMA ODEON", "Cinema Odeon", (900, 2200), "leisure", 1),
+]
+USD = [
+    ("UBER TRIP", "Uber", (900, 3200), "transport", 3),
+    ("STEAM GAMES", "Steam", (500, 6000), "leisure", 1),
 ]
 
 
@@ -43,16 +50,22 @@ def run() -> None:
     rng = random.Random(37)
     with db.sessions() as s:
         if s.scalar(select(func.count()).select_from(Transaction)):
-            print("Il database ha già dei dati: niente demo.")
+            print("The database already has data: no demo.")
             return
-        main = Account(
-            name="Conto Corrente", institution="Banca Demo", kind="checking", source="manual"
-        )
-        card = Account(name="Carta Hype", institution="Hype", kind="card", source="manual")
-        savings = Account(
-            name="Salvadanaio", institution="Banca Demo", kind="savings", source="manual"
-        )
-        s.add_all([main, card, savings])
+        user = create_user(s, "demo", "demo-password", admin=True, name="Demo")
+        uid = user.id
+        main = Account(user_id=uid, name="Current account", institution="Demo Bank",
+                       kind="checking", iban="IT60X0542811101000000123456")  # fmt: skip
+        card = Account(user_id=uid, name="Travel card", institution="Revolut", kind="card",
+                       currency="USD")  # fmt: skip
+        savings = Account(user_id=uid, name="Piggy bank", institution="Demo Bank", kind="savings")
+        btc = Account(user_id=uid, name="Bitcoin", institution="Kraken", kind="crypto",
+                      currency="BTC", source="linked")  # fmt: skip
+        eth = Account(user_id=uid, name="Ethereum", institution="Ledger", kind="crypto",
+                      currency="ETH", source="linked")  # fmt: skip
+        s.add_all([main, card, savings, btc, eth])
+        s.add_all([Rate(code="USD", eur=Decimal("0.92")), Rate(code="BTC", eur=Decimal("61500")),
+                   Rate(code="ETH", eur=Decimal("2850"))])  # fmt: skip
         s.commit()
         today = date.today()
         start = (today.replace(day=1) - timedelta(days=240)).replace(day=1)
@@ -62,80 +75,62 @@ def run() -> None:
         while day <= today:
             for dom, text, party, cents, cat in FIXED:
                 if day.day == dom:
-                    bump = (
-                        100
-                        if cat == "abbonamenti"
-                        and party == "Netflix"
-                        and day > today - timedelta(days=60)
-                        else 0
-                    )
-                    moves_main.append(
-                        NewMovement(
-                            day=day,
-                            amount_cents=cents - bump,
-                            description=text,
-                            counterparty=party,
-                            category=cat,
-                        )
-                    )
+                    bump = 100 if party == "Netflix" and day > today - timedelta(days=60) else 0
+                    moves_main.append(NewMovement(day, cents - bump, text, party, category=cat))
             for text, party, (lo, hi), cat, per_month in VARIABLE:
                 if rng.random() < per_month / 30:
-                    target = moves_card if cat in ("ristoranti", "shopping") else moves_main
-                    target.append(
-                        NewMovement(
-                            day=day,
-                            amount_cents=-rng.randint(lo, hi),
-                            description=text,
-                            counterparty=party,
-                            category=cat,
-                        )
+                    moves_main.append(
+                        NewMovement(day, -rng.randint(lo, hi), text, party, category=cat)
+                    )
+            for text, party, (lo, hi), cat, per_month in USD:
+                if rng.random() < per_month / 30:
+                    moves_card.append(
+                        NewMovement(day, -rng.randint(lo, hi), text, party, category=cat)
                     )
             if day.day == 28:
-                moves_main.append(
-                    NewMovement(
-                        day=day,
-                        amount_cents=-30000,
-                        description="GIROCONTO SALVADANAIO",
-                        counterparty="Salvadanaio",
-                        category="risparmio",
-                    )
-                )
+                moves_main.append(NewMovement(day, -30000, "TRANSFER TO PIGGY BANK", "Piggy bank",
+                                              category="savings"))  # fmt: skip
             day += timedelta(days=1)
         transfers = [
             NewMovement(
-                day=m.day,
-                amount_cents=-m.amount_cents,
-                description="GIROCONTO DA CONTO CORRENTE",
-                counterparty="Conto Corrente",
-                category="risparmio",
+                m.day,
+                -m.amount,
+                "TRANSFER FROM CURRENT ACCOUNT",
+                "Current account",
+                category="savings",
             )
             for m in moves_main
-            if m.category == "risparmio"
+            if m.category == "savings"
         ]
-        add_movements(s, savings.id, transfers, "import")
-        add_movements(s, main.id, moves_main, "import")
-        add_movements(s, card.id, moves_card, "import")
+        add_movements(s, savings, transfers, "import")
+        add_movements(s, main, moves_main, "import")
+        add_movements(s, card, moves_card, "import")
         now = datetime.now(UTC)
-        main.balance_cents, main.balance_at = 384520, now
-        card.balance_cents, card.balance_at = 21340, now
-        savings.balance_cents, savings.balance_at = 1250000, now
+        main.balance, main.balance_at = 384520, now
+        card.balance, card.balance_at = 21340, now
+        savings.balance, savings.balance_at = 1250000, now
+        btc.balance, btc.balance_at = 4_215_000, now  # 0.04215 BTC
+        eth.balance, eth.balance_at = 85_000_000, now  # 0.85 ETH
         last = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         s.add(
             Report(
+                user_id=uid,
                 month=last,
                 model="demo",
+                language="en",
                 content=(
-                    "## Com'è andato il mese\nHai speso **1.612 €**, in linea con la tua media, e messo da parte "
-                    "**300 €** nel salvadanaio.\n\n## Dove sono andati i soldi\n- Casa e bollette restano la voce "
-                    "principale (45%).\n- Ristoranti **+38 €** rispetto al solito: tre pizze in più.\n\n"
-                    "## Da rivedere\n- **Netflix è aumentato** di 1 € al mese.\n\n## Tre consigli\n1. Porta il "
-                    "giroconto al salvadanaio a 350 €: il margine c'è.\n2. Metti un tetto di 120 € ai ristoranti.\n"
-                    "3. Valuta se tenere Netflix e Spotify insieme (25,98 €/mese)."
+                    "## How the month went\nYou spent **€1,612**, in line with your usual, and put "
+                    "**€300** aside in the piggy bank.\n\n## Where the money went\n- Home and bills "
+                    "are still the biggest share (45%).\n- Restaurants **+€38** against the usual: "
+                    "three more pizzas.\n\n## To review\n- **Netflix went up** by €1 a month.\n\n"
+                    "## Three tips\n1. Raise the monthly transfer to the piggy bank to €350: there is "
+                    "room.\n2. Cap restaurants at €120.\n3. Decide whether to keep both Netflix and "
+                    "Spotify (€25.98 a month)."
                 ),
             )
         )
         s.commit()
-    print("Demo pronta.")
+    print("Demo ready: user «demo», password «demo-password».")
 
 
 if __name__ == "__main__":
