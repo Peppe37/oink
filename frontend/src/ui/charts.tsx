@@ -2,7 +2,7 @@
    two or three colours so the numbers stay the point. Values are in the main currency. */
 
 import { motion } from "framer-motion";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../i18n";
 import { categoryColor, CategoryTile } from "./icons";
 
@@ -66,6 +66,7 @@ export function Bars({ data, currency }: { data: { month: string; income: number
   const { fmt } = useI18n();
   const max = Math.max(1, ...data.flatMap((d) => [d.income, d.spending]));
   const [hover, setHover] = useState<number>(data.length - 1);
+  useEffect(() => { setHover(data.length - 1); }, [data.length]);
   const current = data[hover];
   return (
     <div>
@@ -106,7 +107,10 @@ export function Donut({ data, total, currency }: { data: [string, number][]; tot
   const c = 2 * Math.PI * r;
   const top = data.slice(0, 6);
   const rest = data.slice(6).reduce((s, [, v]) => s + v, 0);
-  const slices: [string, number][] = rest ? [...top, ["other", rest]] : top;
+  const hasOther = top.some(([k]) => k === "other");
+  const slices: [string, number][] = !rest ? top
+    : hasOther ? top.map(([k, v]) => [k, k === "other" ? v + rest : v] as [string, number])
+    : [...top, ["other", rest]];
   const [active, setActive] = useState<number | null>(null);
   let offset = 0;
   const label = active !== null ? slices[active] : null;

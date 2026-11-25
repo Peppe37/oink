@@ -442,9 +442,53 @@ def add_fixed(
 ) -> dict[str, Any]:
     f = FixedCost(user_id=who.user_id, name=body.name, amount=Decimal(0))
     _fixed_values(f, body)
+    # the same cost again (marked twice from the movements): keep the one there is
+    key = (f.match or f.name).strip().lower()
+    for other in db.scalars(select(FixedCost).where(FixedCost.user_id == who.user_id)):
+        if (other.match or other.name).strip().lower() == key and abs(other.amount - f.amount) < Decimal("0.01") \
+                and other.frequency == f.frequency:  # fmt: skip
+            return {"id": other.id, "duplicate": True}
     db.add(f)
     db.commit()
     return {"id": f.id}
+
+
+class SplitPart(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    amount: str | float
+    frequency: Frequency = "monthly"
+    next_due: date | None = None
+    category: str | None = None
+
+
+class SplitIn(BaseModel):
+    parts: list[SplitPart] = Field(min_length=2, max_length=10)
+
+
+@router.post("/fixed-costs/{cost_id}/split")
+def split_fixed(
+    cost_id: int, body: SplitIn, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    """One payment, several costs (a server monthly and a domain yearly paid together):
+    the cost becomes its parts, each with its own amount and frequency, same payee."""
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    ids = []
+    for part in body.parts:
+        amount = _dec(part.amount, "amount")
+        if amount is None or amount <= 0:
+            raise HTTPException(422, "amount_invalid")
+        new = FixedCost(user_id=who.user_id, name=part.name, amount=abs(amount), currency=f.currency,
+                        frequency=part.frequency, category=(part.category or f.category), match=f.match or f.name.lower(),
+                        next_due=part.next_due or f.next_due, active=True)  # fmt: skip
+        db.add(new)
+        db.flush()
+        ids.append(new.id)
+    db.delete(f)
+    db.commit()
+    return {"ids": ids}
 
 
 @router.put("/fixed-costs/{cost_id}")

@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Markdown as ReactMarkdown } from "../ui/Markdown";
-import { api, type FixedCosts, type Picture, type Risk } from "../api";
+import { api, type FixedCosts, type FixedItem, type Picture, type Risk } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { Field, Row, Sheet, Spinner, rise } from "../ui/bits";
@@ -65,6 +65,9 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
   const errorText = useErrorText();
   const [data, setData] = useState<FixedCosts | null>(null);
   const [adding, setAdding] = useState<{ name: string; amount: string; category: string } | null>(null);
+  const [editing, setEditing] = useState<FixedItem | null>(null);
+  const [all, setAll] = useState(false);
+  const FIRST = 5;
   const load = useCallback(() => { api.fixed().then(setData).catch((e) => notify(errorText(e))); }, [notify, errorText]);
   useEffect(load, [load]);
   if (!data) return <div className="skeleton" style={{ height: 200 }} />;
@@ -75,13 +78,19 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
       <div className="stat-row"><div><span className="muted small-text">{t("plan.perMonth")}</span><div className="mid num">{fmt.money(data.monthly, data.currency)}</div></div>
         <div><span className="muted small-text">{t("plan.perYear")}</span><div className="mid num faint">{fmt.money(data.yearly, data.currency, { compact: true })}</div></div></div>
       <div className="list">
-        {data.items.map((f) => (
+        {(all ? data.items : data.items.slice(0, FIRST)).map((f) => (
           <Row key={f.id} icon={<CategoryTile category={f.category || "bills"} size={36} />} title={f.name}
             detail={`${fmt.money(f.amount, f.currency)} · ${t(`invest.freq.${f.frequency}` as never)}${f.next_due ? ` · ${fmt.date(f.next_due)}` : ""}`}
-            right={<span className="row" style={{ gap: 4 }}><span className="num">{fmt.money(f.per_month, data.currency)}</span>
+            right={<span className="row" style={{ gap: 2 }}><span className="num">{fmt.money(f.per_month, data.currency)}</span>
+              <button className="icon-btn" aria-label={t("common.edit")} onClick={() => setEditing(f)}><Icon name="pencil" size={16} /></button>
               <button className="icon-btn" aria-label={t("common.delete")} onClick={async () => { await api.deleteFixed(f.id); load(); }}><Icon name="trash" size={16} /></button></span>} />
         ))}
       </div>
+      {data.items.length > FIRST && (
+        <button className="btn ghost small expand-btn" onClick={() => setAll((v) => !v)}>
+          {all ? t("plan.showLess") : t("plan.showAll", { count: data.items.length })} <Icon name="chevron" size={14} style={{ transform: all ? "rotate(-90deg)" : "rotate(90deg)" }} />
+        </button>
+      )}
       {data.suggestions.length > 0 && (
         <>
           <h4 className="section-label">{t("plan.suggested")}</h4>
@@ -95,6 +104,9 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
       )}
       <Sheet open={!!adding} onClose={() => setAdding(null)} title={t("plan.addFixed")}>
         {adding && <FixedForm initial={adding} currency={data.currency} onDone={() => { setAdding(null); load(); }} />}
+      </Sheet>
+      <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing?.name}>
+        {editing && <FixedEdit item={editing} onDone={() => { setEditing(null); load(); notify(t("docs.saved")); }} />}
       </Sheet>
     </Glass>
   );
@@ -127,6 +139,65 @@ function FixedForm({ initial, currency, onDone }: { initial: { name: string; amo
           <option value="">{t("category.none")}</option>{CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(t, c)}</option>)}</select></Field>
         <Field label={`${t("plan.nextDue")} (${t("common.optional")})`}><input className="field" type="date" value={due} onChange={(e) => setDue(e.target.value)} /></Field>
       </div>
+      {error && <div className="error">{error}</div>}
+      <button className="btn big-btn">{t("common.save")}</button>
+    </form>
+  );
+}
+
+/** Edit a fixed cost, or split one payment into its parts (a server monthly and a domain
+ *  yearly, paid together): each part keeps its own amount and frequency. */
+function FixedEdit({ item, onDone }: { item: FixedItem; onDone: () => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [name, setName] = useState(item.name);
+  const [amount, setAmount] = useState(item.amount);
+  const [frequency, setFrequency] = useState(item.frequency);
+  const [category, setCategory] = useState(item.category);
+  const [due, setDue] = useState(item.next_due ?? "");
+  const [splitting, setSplitting] = useState(false);
+  const [parts, setParts] = useState([{ name: item.name, amount: item.amount, frequency: item.frequency }, { name: "", amount: "", frequency: "yearly" }]);
+  const [error, setError] = useState("");
+  const freqs = ["weekly", "monthly", "quarterly", "yearly"];
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      if (splitting) await api.splitFixed(item.id, parts.filter((p) => p.name && p.amount).map((p) => ({ ...p, amount: p.amount.replace(",", "."), next_due: due || null })));
+      else await api.updateFixed(item.id, { name, amount: amount.replace(",", "."), currency: item.currency, frequency, category, next_due: due || null, match: item.match, active: item.active });
+      onDone();
+    } catch (err) { setError(errorText(err)); }
+  };
+  const setPart = (i: number, key: "name" | "amount" | "frequency", value: string) => setParts((old) => old.map((p, j) => (j === i ? { ...p, [key]: value } : p)));
+  return (
+    <form className="stack" onSubmit={save}>
+      {!splitting ? (<>
+        <Field label={t("accounts.name")}><input className="field" value={name} onChange={(e) => setName(e.target.value)} required /></Field>
+        <div className="two">
+          <Field label={`${t("movements.amount")} (${item.currency})`}><input className="field num" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} required /></Field>
+          <Field label={t("invest.frequency")}><select className="field" value={frequency} onChange={(e) => setFrequency(e.target.value)}>
+            {freqs.map((f) => <option key={f} value={f}>{t(`invest.freq.${f}` as never)}</option>)}</select></Field>
+        </div>
+        <div className="two">
+          <Field label={t("movements.category")}><select className="field" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">{t("category.none")}</option>{CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(t, c)}</option>)}</select></Field>
+          <Field label={`${t("plan.nextDue")} (${t("common.optional")})`}><input className="field" type="date" value={due} onChange={(e) => setDue(e.target.value)} /></Field>
+        </div>
+        <button type="button" className="btn ghost" onClick={() => setSplitting(true)}><Icon name="exchange" size={16} /> {t("plan.split")}</button>
+      </>) : (<>
+        <p className="muted small-text" style={{ margin: 0 }}>{t("plan.splitHint", { amount: item.amount })}</p>
+        {parts.map((p, i) => (
+          <div key={i} className="split-part">
+            <input className="field" placeholder={t("accounts.name")} value={p.name} onChange={(e) => setPart(i, "name", e.target.value)} />
+            <input className="field num" inputMode="decimal" placeholder="0.00" value={p.amount} onChange={(e) => setPart(i, "amount", e.target.value)} />
+            <select className="field" value={p.frequency} onChange={(e) => setPart(i, "frequency", e.target.value)}>
+              {freqs.map((f) => <option key={f} value={f}>{t(`invest.freq.${f}` as never)}</option>)}</select>
+          </div>
+        ))}
+        <div className="row" style={{ gap: 8 }}>
+          <button type="button" className="btn ghost small" onClick={() => setParts((old) => [...old, { name: "", amount: "", frequency: "monthly" }])}><Icon name="plus" size={14} /> {t("plan.addPart")}</button>
+          <button type="button" className="btn ghost small" onClick={() => setSplitting(false)}>{t("common.back")}</button>
+        </div>
+      </>)}
       {error && <div className="error">{error}</div>}
       <button className="btn big-btn">{t("common.save")}</button>
     </form>

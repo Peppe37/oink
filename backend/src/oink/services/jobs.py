@@ -100,6 +100,12 @@ async def monthly_report(
     language = language or user.language or "en"
     facts = facts_for_ai(Book.of(db, user), month, with_text=ai.config().send_descriptions)
     content = await ai.monthly_report(facts, language)
+    for old in db.scalars(  # generated again: the new one replaces the month's old one
+        select(Report).where(
+            Report.user_id == user.id, Report.month == month, Report.kind == "monthly"
+        )
+    ):
+        db.delete(old)
     report = Report(
         user_id=user.id,
         month=month,

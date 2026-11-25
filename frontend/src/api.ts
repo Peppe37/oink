@@ -10,7 +10,7 @@ export type Account = {
 };
 export type Tx = {
   id: number; account_id: number; day: string; amount: string; currency: string; description: string;
-  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null; plan_id?: number | null;
+  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null; plan_id?: number | null; balance_after?: string | null; total_after?: number | null; partner_account_id?: number | null;
 };
 export type Recurring = { name: string; monthly: number; last: number; increased: boolean; category: string; last_day: string };
 export type MonthSummary = {
@@ -51,6 +51,11 @@ export type PlanItem = {
 export type PlanProposal = {
   kind: "ready" | "pick"; isin?: string; symbol?: string; name?: string; amount: string; currency: string; day: number;
   account_id: number; account: string; start?: string; purchases?: number; months?: number;
+};
+export type MovementReview = {
+  plans: PlanProposal[]; checked: number;
+  fixed: { name: string; match: string; amount: string; currency: string; frequency: string; category: string; months: number; last: string }[];
+  categories: { tx_id: number; day: string; name: string; amount: string; currency: string; account: string; current: string; proposed: string; reason: string }[];
 };
 export type PlanSuggestion = { account_id: number; account: string; amount: string; currency: string; day: number; months: number; per_month: number; last: string };
 export type SearchHit = { symbol: string; name: string; kind: string; exchange: string };
@@ -167,7 +172,8 @@ export const api = {
   documentUrl: (id: number, download = false) => `/api/documents/${id}/file${download ? "?download=true" : ""}`,
 
   reports: () => call<Report[]>("/reports"),
-  generate: (language: string) => call<Report>(`/reports/generate?${query({ language })}`, { method: "POST" }),
+  generate: (language: string, month?: string) => call<Report>(`/reports/generate?${query({ language, month })}`, { method: "POST" }),
+  review: (range: { date_from?: string; date_to?: string }) => call<MovementReview>("/transactions/review", { method: "POST", body: json(range) }),
   ask: (question: string, language: string) => call<{ answer: string }>(`/ask?${query({ language })}`, { method: "POST", body: json({ question }) }),
 
   providers: () => call<Providers>("/providers"),
@@ -208,6 +214,10 @@ export const api = {
   fixed: () => call<FixedCosts>("/fixed-costs"),
   addFixed: (body: { name: string; amount: string; currency: string; frequency: string; category?: string; next_due?: string | null; match?: string }) => call("/fixed-costs", { method: "POST", body: json(body) }),
   deleteFixed: (id: number) => call(`/fixed-costs/${id}`, { method: "DELETE" }),
+  updateFixed: (id: number, body: { name: string; amount: string; currency: string; frequency: string; category?: string; next_due?: string | null; match?: string; active?: boolean }) =>
+    call(`/fixed-costs/${id}`, { method: "PUT", body: json(body) }),
+  splitFixed: (id: number, parts: { name: string; amount: string; frequency: string; next_due?: string | null }[]) =>
+    call<{ ids: number[] }>(`/fixed-costs/${id}/split`, { method: "POST", body: json({ parts }) }),
   risk: () => call<Risk>("/profile/risk"),
   setRisk: (body: { answers: Record<string, number>; horizon_years: number; goals: string }) => call<Risk>("/profile/risk", { method: "PUT", body: json(body) }),
   picture: () => call<Picture>("/picture"),

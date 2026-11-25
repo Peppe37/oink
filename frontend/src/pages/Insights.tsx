@@ -23,11 +23,12 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
   const loadPicture = () => { api.picture().then(setPicture).catch(() => undefined); };
   useEffect(() => { api.reports().then((r) => setReports(r.filter((x) => x.kind !== "advice"))).catch((e) => notify(errorText(e))); loadPicture(); }, [notify, errorText]);
 
-  const generate = async () => {
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const generate = async (forMonth?: string) => {
     setBusy(true);
     try {
-      const report = await api.generate(lang);
-      setReports((old) => [report, ...(old ?? [])]);
+      const report = await api.generate(lang, forMonth ?? month);
+      setReports((old) => [report, ...(old ?? []).filter((r) => r.month !== report.month)].sort((a, b) => b.month.localeCompare(a.month)));
     } catch (e) {
       notify(errorText(e));
     } finally {
@@ -51,7 +52,9 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
 
   return (
     <motion.div className="page" variants={stagger} initial="hidden" animate="show">
-      <PageHeader title={t("reports.title")} action={ai ? <button className="btn" onClick={generate} disabled={busy}>{busy ? <><Spinner /> {t("reports.generating")}</> : <><Icon name="sparkle" size={18} /> <span className="hide-xs">{t("reports.generate")}</span></>}</button> : undefined} />
+      <PageHeader title={t("reports.title")} action={ai ? <span className="row" style={{ gap: 8 }}>
+        <input className="field month-pick" type="month" value={month} max={new Date().toISOString().slice(0, 7)} onChange={(e) => setMonth(e.target.value)} aria-label={t("reports.month")} />
+        <button className="btn" onClick={() => generate()} disabled={busy}>{busy ? <><Spinner /> {t("reports.generating")}</> : <><Icon name="sparkle" size={18} /> <span className="hide-xs">{t("reports.generate")}</span></>}</button></span> : undefined} />
 
       <motion.div variants={rise}><PictureCard picture={picture} /></motion.div>
       <motion.div variants={rise}><AdviceCard ai={ai} notify={notify} /></motion.div>
@@ -85,7 +88,9 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
         <>
           <motion.div variants={rise}>
             <Glass className="card">
-              <div className="row between"><h3 className="cap">{fmt.month(latest.month)}</h3><span className="faint small-text">{latest.model}</span></div>
+              <div className="row between"><h3 className="cap">{fmt.month(latest.month)}</h3>
+                <span className="row" style={{ gap: 8 }}><span className="faint small-text hide-xs">{latest.model}</span>
+                  {ai && <button className="btn ghost small" disabled={busy} onClick={() => generate(latest.month)}><Icon name="sync" size={14} /> {t("reports.regenerate")}</button>}</span></div>
               <div className="md"><ReactMarkdown>{latest.content}</ReactMarkdown></div>
             </Glass>
           </motion.div>
@@ -94,7 +99,8 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
               <h4 className="day-head">{t("reports.archive")}</h4>
               {past.map((r) => (
                 <details key={r.id} className="glass report-past">
-                  <summary className="cap">{fmt.month(r.month)} <span className="faint small-text">{fmt.date(r.created)}</span></summary>
+                  <summary className="cap">{fmt.month(r.month)} <span className="faint small-text">{fmt.date(r.created)}</span>
+                    {ai && <button className="btn ghost small" style={{ marginLeft: "auto" }} disabled={busy} onClick={(e) => { e.preventDefault(); generate(r.month); }}>{t("reports.regenerate")}</button>}</summary>
                   <div className="md"><ReactMarkdown>{r.content}</ReactMarkdown></div>
                 </details>
               ))}

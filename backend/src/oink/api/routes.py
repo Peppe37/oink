@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -19,6 +19,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -52,7 +53,7 @@ from oink.api.schemas import (
 )
 from oink.core.config import Settings
 from oink.core.db import Account, ApiToken, Connection, Report, StatementRequest, Transaction, User
-from oink.core.money import CRYPTO, FIAT, MoneyError, normalise_code, to_minor
+from oink.core.money import CRYPTO, FIAT, MoneyError, as_text, normalise_code, to_minor
 from oink.core.security import (
     COOKIE,
     SCOPES,
@@ -86,6 +87,7 @@ from oink.services.connections import (
 from oink.services.importer import ImportError_, parse_statement
 from oink.services.jobs import categorize_pending, monthly_report
 from oink.services.ledger import CATEGORIES, INTERNAL, NewMovement, add_movements, learn_rule
+from oink.services.review import review
 from oink.services.statements import MAX_FILE, apply, pick_account
 from oink.services.transfers import match_transfers, untracked
 from oink.services.transfers import unlink as unlink_transfer
@@ -468,29 +470,75 @@ def delete_account(
 
 
 # -- transactions ----------------------------------------------------------------------
+def running_balances(db: Session, user: User) -> tuple[dict[int, int], dict[int, float]]:
+    """Balance of its account right after each movement, and the total of all accounts
+    (in the main currency) at that point: walking back from today's balances."""
+    book = rep.Book.of(db, user)
+    accounts = [a for a in book.accounts() if a.balance is not None]
+    by_account = {a.id: a.balance or 0 for a in accounts}
+    total = sum(book.value(a.balance or 0, a.currency) or 0.0 for a in accounts)
+    after: dict[int, int] = {}
+    total_after: dict[int, float] = {}
+    for t in db.scalars(
+        select(Transaction)
+        .where(Transaction.user_id == user.id, Transaction.account_id.in_(by_account))
+        .order_by(Transaction.day.desc(), func.coalesce(Transaction.seq, Transaction.id).desc())
+    ):
+        after[t.id] = by_account[t.account_id]
+        total_after[t.id] = round(total, 2)
+        by_account[t.account_id] -= t.amount
+        total -= book.value(t.amount, t.currency) or 0.0
+    return after, total_after
+
+
 @api.get("/transactions", response_model=list[TransactionOut])
 def transactions(
     account_id: int | None = None,
     month: str | None = Query(default=None, pattern=MONTH),
     category: str | None = None,
+    categories: str | None = Query(default=None, max_length=400, description="comma separated"),
+    direction: Literal["in", "out"] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: Literal["date", "amount_desc", "amount_asc"] = "date",
     q: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     who: Caller = Depends(require("transactions:read")),
     db: Session = Depends(get_db),
 ) -> list[TransactionOut]:
-    query = (
-        select(Transaction)
-        .where(Transaction.user_id == who.user_id)
-        .order_by(Transaction.day.desc(), func.coalesce(Transaction.seq, Transaction.id).desc())
-    )
+    """Movements, filtered (account, period, categories, money in or out, words) and sorted
+    (newest first, or by size). Each carries its account's balance right after it and the
+    total of all accounts at that point."""
+    order: tuple[Any, ...] = {
+        "date": (Transaction.day.desc(), func.coalesce(Transaction.seq, Transaction.id).desc()),
+        "amount_desc": (func.abs(Transaction.amount).desc(), Transaction.day.desc()),
+        "amount_asc": (func.abs(Transaction.amount).asc(), Transaction.day.desc()),
+    }[sort]
+    query = select(Transaction).where(Transaction.user_id == who.user_id).order_by(*order)
     if account_id is not None:
         query = query.where(Transaction.account_id == account_id)
     if month:
         start, end = rep.month_bounds(month)
         query = query.where(Transaction.day >= start, Transaction.day < end)
+    if date_from:
+        query = query.where(Transaction.day >= date_from)
+    if date_to:
+        query = query.where(Transaction.day <= date_to)
+    wanted = [c.strip().lower() for c in (categories or "").split(",") if c.strip()]
     if category is not None:
-        query = query.where(Transaction.category == category)
+        wanted.append(category)
+    if wanted:
+        query = query.where(
+            or_(
+                Transaction.category.in_([c for c in wanted if c != "none"]),
+                *([Transaction.category == ""] if "none" in wanted else []),
+            )
+        )
+    if direction == "in":
+        query = query.where(Transaction.amount > 0)
+    elif direction == "out":
+        query = query.where(Transaction.amount < 0)
     if q:
         like = f"%{q}%"
         query = query.where(
@@ -500,7 +548,41 @@ def transactions(
                 Transaction.note.ilike(like),
             )
         )
-    return [TransactionOut.of(t) for t in db.scalars(query.limit(limit).offset(offset))]
+    rows = list(db.scalars(query.limit(limit).offset(offset)))
+    after, total_after = running_balances(db, who.user)
+    partners = {
+        tx_id: acc_id
+        for tx_id, acc_id in db.execute(
+            select(Transaction.id, Transaction.account_id).where(
+                Transaction.id.in_([t.transfer_id for t in rows if t.transfer_id])
+            )
+        )
+    }
+    out = []
+    for t in rows:
+        item = TransactionOut.of(t)
+        item.partner_account_id = partners.get(t.transfer_id) if t.transfer_id else None
+        if t.id in after:
+            item.balance_after = as_text(after[t.id], t.currency)
+            item.total_after = total_after[t.id]
+        out.append(item)
+    return out
+
+
+class ReviewIn(BaseModel):
+    date_from: date | None = None
+    date_to: date | None = None
+
+
+@api.post("/transactions/review")
+async def review_movements(
+    body: ReviewIn,
+    request: Request,
+    who: Caller = Depends(require("transactions:read")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Proposals for a period: savings plans, fixed costs, categories to fix."""
+    return await review(db, who.user, ai_of(request), body.date_from, body.date_to)
 
 
 @api.post("/transactions", response_model=TransactionOut)

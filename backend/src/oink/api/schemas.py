@@ -116,6 +116,9 @@ class TransactionOut(BaseModel):
     source: str
     transfer_id: int | None = None
     plan_id: int | None = None
+    balance_after: str | None = None  # its account's balance right after it
+    total_after: float | None = None  # all accounts, main currency, right after it
+    partner_account_id: int | None = None  # the other account of a transfer
 
     @classmethod
     def of(cls, t: Transaction) -> TransactionOut:

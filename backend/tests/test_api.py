@@ -237,3 +237,106 @@ def test_a_revoked_token_disappears_from_the_list(owner: TestClient) -> None:
         owner.get("/api/accounts", headers={"Authorization": f"Bearer {gone['token']}"}).status_code
         == 401
     )
+
+
+def test_movements_filter_sort_and_carry_the_running_balance(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Conto", "balance": "100"}).json()
+    for day, amount, cat in (
+        ("2026-11-01", "-10", "groceries"),
+        ("2026-11-02", "-50", "travel"),
+        ("2026-11-03", "200", "salary"),
+    ):
+        owner.post(
+            "/api/transactions",
+            json={
+                "account_id": acc["id"],
+                "day": day,
+                "amount": amount,
+                "description": cat,
+                "category": cat,
+            },
+        )
+    rows = owner.get("/api/transactions").json()
+    # newest first, and the balance right after each one walks back from today's balance
+    assert [(r["day"], r["balance_after"]) for r in rows] == [
+        ("2026-11-03", "240.00"),
+        ("2026-11-02", "40.00"),
+        ("2026-11-01", "90.00"),
+    ]
+    assert rows[0]["total_after"] == 240.0
+    biggest = owner.get(
+        "/api/transactions", params={"sort": "amount_desc", "direction": "out"}
+    ).json()
+    assert [r["amount"] for r in biggest] == ["-50.00", "-10.00"]
+    picked = owner.get(
+        "/api/transactions", params={"categories": "travel,salary", "date_from": "2026-11-02"}
+    ).json()
+    assert {r["category"] for r in picked} == {"travel", "salary"}
+
+
+def test_a_fixed_cost_marked_twice_is_kept_once_and_can_be_split(owner: TestClient) -> None:
+    body = {
+        "name": "Ovhcloud",
+        "amount": "18.92",
+        "currency": "EUR",
+        "frequency": "monthly",
+        "match": "ovhcloud",
+    }
+    first = owner.post("/api/fixed-costs", json=body).json()
+    again = owner.post("/api/fixed-costs", json=body).json()
+    assert again == {"id": first["id"], "duplicate": True}
+    parts = [
+        {"name": "VPS", "amount": "7.92", "frequency": "monthly"},
+        {"name": "Dominio", "amount": "132", "frequency": "yearly"},
+    ]
+    assert (
+        len(
+            owner.post(f"/api/fixed-costs/{first['id']}/split", json={"parts": parts}).json()["ids"]
+        )
+        == 2
+    )
+    costs = owner.get("/api/fixed-costs").json()
+    assert sorted((i["name"], i["frequency"]) for i in costs["items"]) == [
+        ("Dominio", "yearly"),
+        ("VPS", "monthly"),
+    ]
+    assert costs["monthly"] == 18.92  # 7.92 + 132 / 12
+
+
+def test_the_review_proposes_fixed_costs_and_categories(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "100"}).json()
+    for month in ("09", "10", "11"):
+        owner.post(
+            "/api/transactions",
+            json={
+                "account_id": acc["id"],
+                "day": f"2026-{month}-05",
+                "amount": "-7.92",
+                "description": "Ovhcloud",
+            },
+        )
+    owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-08-10",
+            "amount": "-30",
+            "description": "Esselunga",
+            "category": "groceries",
+        },
+    )
+    lone = owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-11-12",
+            "amount": "-12",
+            "description": "Esselunga",
+        },
+    ).json()
+    reply = owner.post("/api/transactions/review", json={"date_from": "2026-11-01"}).json()
+    assert [(f["name"], f["amount"], f["frequency"]) for f in reply["fixed"]] == [
+        ("Ovhcloud", "7.92", "monthly")
+    ]
+    groceries = next(c for c in reply["categories"] if c["tx_id"] == lone["id"])
+    assert groceries["proposed"] == "groceries" and groceries["reason"] == "same_payee"
