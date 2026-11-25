@@ -151,3 +151,39 @@ async def history(
         marker.updated = datetime.now(UTC)
     db.commit()
     return sorted(points.items())
+
+
+_DAILY: dict[str, tuple[datetime, dict[date, Decimal]]] = {}
+
+
+async def daily_closes(
+    symbol: str, years: int = 3, client: httpx.AsyncClient | None = None
+) -> dict[date, Decimal]:
+    """Daily closes (not adjusted: what a buy actually paid), kept in memory for 12 hours."""
+    symbol = symbol.strip().upper()
+    cached = _DAILY.get(symbol)
+    if cached and cached[0] > datetime.now(UTC) - timedelta(hours=12):
+        return cached[1]
+    chart = _chart(
+        await _get(client, CHART.format(symbol=symbol), range=f"{years}y", interval="1d")
+    )
+    stamps = chart.get("timestamp") or []
+    closes = ((chart.get("indicators", {}).get("quote") or [{}])[0].get("close")) or []
+    points = {
+        datetime.fromtimestamp(ts, UTC).date(): Decimal(str(round(float(c), 6)))
+        for ts, c in zip(stamps, closes, strict=False)
+        if c is not None
+    }
+    if not points:
+        raise MarketError("no_history")
+    _DAILY[symbol] = (datetime.now(UTC), points)
+    return points
+
+
+def close_on(closes: dict[date, Decimal], day: date) -> Decimal | None:
+    """The close of that day, or of the last trading day before it (within a week)."""
+    for back in range(8):
+        found = closes.get(day - timedelta(days=back))
+        if found is not None:
+            return found
+    return None

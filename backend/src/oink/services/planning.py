@@ -50,9 +50,47 @@ def score(answers: dict[str, int]) -> int:
 async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[str, Any]:
     """Every holding priced and converted to the base currency."""
     rows = list(db.scalars(select(Holding).where(Holding.user_id == book.user.id)))
+    # units bought by plans (matched in the broker's movements) count as holdings too:
+    # on top of a holding typed in by hand for the same security, or as their own
+    from oink.services.plans import extra_units, plan_positions
+
+    positions = await plan_positions(db, book.user)
+    by_symbol = {h.symbol.upper(): h for h in rows}
+    from_plans: dict[str, tuple[Decimal, Decimal, str, str]] = {}
+    for plan in db.scalars(select(Plan).where(Plan.user_id == book.user.id)):
+        pos = positions.get(plan.id, {})
+        if not pos.get("executions"):
+            continue
+        held = by_symbol.get(plan.symbol.upper())
+        units = extra_units(db, plan, held, pos)
+        old = from_plans.get(
+            plan.symbol.upper(), (Decimal(0), Decimal(0), plan.name, plan.currency)
+        )
+        from_plans[plan.symbol.upper()] = (
+            old[0] + units,
+            old[1] + Decimal(pos["invested"]),
+            plan.name,
+            plan.currency,
+        )
     items: list[dict[str, Any]] = []
     total = cost_total = 0.0
-    for h in rows:
+    synthetic = [
+        Holding(
+            id=0,
+            user_id=book.user.id,
+            symbol=sym,
+            name=name,
+            currency=cur,
+            kind="etf" if "." in sym or sym.startswith("^") else "stock",
+            quantity=units,
+            cost=invested,
+        )
+        for sym, (units, invested, name, cur) in from_plans.items()
+        if sym not in by_symbol
+    ]
+    extra = {sym: units for sym, (units, *_rest) in from_plans.items() if sym in by_symbol}
+    for h in [*rows, *synthetic]:
+        quantity = h.quantity + extra.get(h.symbol.upper(), Decimal(0)) if h.id else h.quantity
         price, currency, stale = h.manual_price, h.currency, False
         if price is None:
             try:
@@ -62,7 +100,7 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
             except MarketError:
                 cached = db.get(Quote, h.symbol.upper())
                 price, stale = (cached.price, True) if cached else (None, True)
-        value_native = float(price * h.quantity) if price is not None else None
+        value_native = float(price * quantity) if price is not None else None
         value = to_base(book, value_native, currency) if value_native is not None else None
         cost = to_base(book, h.cost, h.currency) if h.cost is not None else None
         if value is not None:
@@ -74,7 +112,8 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
                 "symbol": h.symbol,
                 "name": h.name,
                 "kind": h.kind,
-                "quantity": str(h.quantity),
+                "quantity": str(round(quantity, 6)),
+                "from_plan": not h.id or h.symbol.upper() in extra,
                 "price": str(price) if price is not None else None,
                 "currency": currency,
                 "value": round(value, 2) if value is not None else None,

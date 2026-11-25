@@ -157,6 +157,9 @@ def add_movements(
         user = db.get(User, account.user_id)
         if user is not None:
             match_transfers(db, user, since=min(t.day for t in added) - WINDOW)
+            from oink.services.plans import match_executions
+
+            match_executions(db, user)
     return AddResult(added=added, duplicates=duplicates)
 
 

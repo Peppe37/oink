@@ -43,7 +43,12 @@ export type UpdateInfo = {
 export type SystemInfo = { version: string; updates?: UpdateInfo; ai_model?: string; banking?: boolean; callback_url?: string; inbox?: string; mcp_url?: string; api_docs?: string; sso?: boolean };
 export type HoldingItem = { id: number; symbol: string; name: string; kind: string; quantity: string; price: string | null; currency: string; value: number | null; cost: number | null; gain: number | null; stale: boolean };
 export type Holdings = { currency: string; total: number; cost: number; gain: number | null; by_kind: Record<string, number>; items: HoldingItem[] };
-export type PlanItem = { id: number; symbol: string; name: string; amount: string; currency: string; frequency: string; start: string; active: boolean };
+export type PlanItem = {
+  id: number; symbol: string; name: string; amount: string; currency: string; frequency: string; start: string; active: boolean;
+  account_id?: number | null; day?: number | null; end?: string | null;
+  position?: { executions: number; invested: string; units: string | null; last: string | null } | null;
+};
+export type PlanSuggestion = { account_id: number; account: string; amount: string; currency: string; day: number; months: number; per_month: number; last: string };
 export type SearchHit = { symbol: string; name: string; kind: string; exchange: string };
 export type Band = { year: number; p5: number; p25: number; p50: number; p75: number; p95: number };
 export type Simulation = {
@@ -185,7 +190,9 @@ export const api = {
   patchHolding: (id: number, body: { quantity?: string; cost?: string | null; manual_price?: string | null }) => call(`/holdings/${id}`, { method: "PATCH", body: json(body) }),
   deleteHolding: (id: number) => call(`/holdings/${id}`, { method: "DELETE" }),
   plans: () => call<PlanItem[]>("/plans"),
-  addPlan: (body: Omit<PlanItem, "id">) => call<PlanItem>("/plans", { method: "POST", body: json(body) }),
+  addPlan: (body: Omit<PlanItem, "id" | "position">) => call<PlanItem>("/plans", { method: "POST", body: json(body) }),
+  updatePlan: (id: number, body: Omit<PlanItem, "id" | "position">) => call<PlanItem>(`/plans/${id}`, { method: "PATCH", body: json(body) }),
+  planSuggestions: () => call<PlanSuggestion[]>("/plans/suggestions"),
   deletePlan: (id: number) => call(`/plans/${id}`, { method: "DELETE" }),
   search: (q: string) => call<SearchHit[]>(`/markets/search?${query({ q })}`),
   simulate: (body: { assets: { symbol: string; weight: number }[]; initial: number; monthly: number; years: number; method: string; inflation: number; target?: number | null }) =>

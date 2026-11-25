@@ -20,6 +20,7 @@ from oink.core.security import Vault
 from oink.services import fx
 from oink.services.ai import AI, AIError
 from oink.services.connections import banking, sync
+from oink.services.plans import match_executions
 from oink.services.reports import Book, facts_for_ai, previous_months
 from oink.services.statements import scan_inbox
 from oink.services.transfers import match_transfers
@@ -165,6 +166,7 @@ async def loop(sessions: sessionmaker[Session], settings: Settings, ai: AI, vaul
                 with sessions() as db:  # also pairs transfers already in the books
                     for user in db.scalars(select(User).where(User.disabled.is_(False))):
                         match_transfers(db, user)
+                        match_executions(db, user)
                 await daily(sessions, settings, ai)
                 last_daily = clock()
         except Exception:

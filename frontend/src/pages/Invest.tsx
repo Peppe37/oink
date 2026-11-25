@@ -3,7 +3,7 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, type Holdings, type PlanItem, type SearchHit, type Simulation } from "../api";
+import { api, type Account, type Holdings, type PlanItem, type PlanSuggestion, type SearchHit, type Simulation } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { FanChart, GrowthChart } from "../ui/charts";
@@ -23,11 +23,18 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   const [holdings, setHoldings] = useState<Holdings | null>(null);
   const [plans, setPlans] = useState<PlanItem[]>([]);
   const [adding, setAdding] = useState<"holding" | "plan" | null>(null);
+  const [suggested, setSuggested] = useState<PlanSuggestion[]>([]);
+  const [preset, setPreset] = useState<Partial<PlanItem> | null>(null);
+  const [editing, setEditing] = useState<PlanItem | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [simFor, setSimFor] = useState<{ symbol: string; monthly: number } | null>(null);
   const load = useCallback(() => {
     api.holdings().then(setHoldings).catch((e) => notify(errorText(e)));
     api.plans().then(setPlans).catch(() => undefined);
+    api.planSuggestions().then(setSuggested).catch(() => undefined);
+    api.accounts().then(setAccounts).catch(() => undefined);
   }, [notify, errorText]);
+  const openPlan = (p: Partial<PlanItem> | null, edit: PlanItem | null = null) => { setPreset(p); setEditing(edit); setAdding("plan"); };
   useEffect(load, [load]);
   const cur = holdings?.currency ?? currency;
 
@@ -67,12 +74,23 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
 
         <motion.div variants={rise} className="span-5">
           <Glass className="card">
-            <div className="row between"><h3>{t("invest.plans")}</h3><button className="btn ghost small" onClick={() => setAdding("plan")}><Icon name="plus" size={16} /> {t("common.add")}</button></div>
+            <div className="row between"><h3>{t("invest.plans")}</h3><button className="btn ghost small" onClick={() => openPlan(null)}><Icon name="plus" size={16} /> {t("common.add")}</button></div>
+            {suggested.map((sg) => (
+              <div key={`${sg.account_id}-${sg.amount}-${sg.day}`} className="note" style={{ marginBottom: 10 }}>
+                <Icon name="sparkle" size={18} />
+                <span style={{ flex: 1 }}>{t("invest.planSuggested", { count: sg.per_month, amount: fmt.money(sg.amount, sg.currency), day: sg.day, account: sg.account })}</span>
+                <button className="btn ghost small" onClick={() => openPlan({ amount: sg.amount, day: sg.day, account_id: sg.account_id })}>{t("invest.planSetUp")}</button>
+              </div>
+            ))}
             {plans.length === 0 ? <p className="muted">{t("invest.plansEmpty")}</p> : (
               <div className="list">
                 {plans.map((p) => (
                   <Row key={p.id} icon={<Tile icon="sync" from="#7ff0c9" to="#0f9e7c" size={36} />} title={p.name || p.symbol}
-                    detail={`${fmt.money(p.amount, p.currency)} · ${t(`invest.freq.${p.frequency}` as never)} · ${t("invest.since", { date: fmt.date(p.start, { month: "short", year: "numeric" }) })}`}
+                    onClick={() => openPlan(p, p)}
+                    detail={[`${fmt.money(p.amount, p.currency)} · ${t(`invest.freq.${p.frequency}` as never)}${p.day ? ` · ${t("invest.onDay", { day: p.day })}` : ""}`,
+                      p.end ? t("invest.until", { date: fmt.date(p.end, { month: "short", year: "numeric" }) }) : t("invest.since", { date: fmt.date(p.start, { month: "short", year: "numeric" }) }),
+                      p.position?.executions ? t("invest.executions", { count: p.position.executions, units: p.position.units ? fmt.number(Number(p.position.units), 4) : "—" })
+                        : p.account_id ? t("invest.noExecutions") : t("invest.noAccount")].join(" · ")}
                     right={<span className="row" style={{ gap: 4 }}>
                       <button className="btn ghost small" onClick={() => setSimFor({ symbol: p.symbol, monthly: Number(p.amount) })}>{t("invest.simulate")}</button>
                       <button className="icon-btn" aria-label={t("common.delete")} onClick={async () => { await api.deletePlan(p.id); load(); }}><Icon name="trash" size={16} /></button>
@@ -89,7 +107,7 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
       </div>
 
       <Sheet open={adding === "holding"} onClose={() => setAdding(null)} title={t("invest.add")}><AddHolding onDone={() => { setAdding(null); load(); }} /></Sheet>
-      <Sheet open={adding === "plan"} onClose={() => setAdding(null)} title={t("invest.addPlan")}><AddPlan currency={cur} onDone={() => { setAdding(null); load(); }} /></Sheet>
+      <Sheet open={adding === "plan"} onClose={() => setAdding(null)} title={editing ? editing.name || editing.symbol : t("invest.addPlan")}><AddPlan key={`${editing?.id ?? "new"}-${preset?.amount ?? ""}`} currency={cur} accounts={accounts} preset={preset} editing={editing} onDone={() => { setAdding(null); load(); }} /></Sheet>
     </motion.div>
   );
 }
@@ -166,19 +184,26 @@ function AddHolding({ onDone }: { onDone: () => void }) {
   );
 }
 
-function AddPlan({ currency, onDone }: { currency: string; onDone: () => void }) {
+function AddPlan({ currency, accounts, preset, editing, onDone }: {
+  currency: string; accounts: Account[]; preset: Partial<PlanItem> | null; editing: PlanItem | null; onDone: () => void;
+}) {
   const { t } = useI18n();
   const errorText = useErrorText();
-  const [hit, setHit] = useState<SearchHit | null>(null);
-  const [amount, setAmount] = useState("100");
-  const [frequency, setFrequency] = useState("monthly");
-  const [start, setStart] = useState(new Date().toISOString().slice(0, 10));
+  const [hit, setHit] = useState<SearchHit | null>(editing ? { symbol: editing.symbol, name: editing.name, kind: "etf", exchange: "" } : null);
+  const [amount, setAmount] = useState(preset?.amount ?? "100");
+  const [frequency, setFrequency] = useState(preset?.frequency ?? "monthly");
+  const [start, setStart] = useState(preset?.start ?? new Date().toISOString().slice(0, 10));
+  const [day, setDay] = useState(String(preset?.day ?? ""));
+  const [end, setEnd] = useState(preset?.end ?? "");
+  const [account, setAccount] = useState<number | "">(preset?.account_id ?? "");
   const [error, setError] = useState("");
   if (!hit) return <SymbolSearch onPick={setHit} />;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    const body = { symbol: hit.symbol, name: hit.name, amount: amount.replace(",", "."), currency, frequency, start, active: true,
+      account_id: account || null, day: day ? Number(day) : null, end: end || null };
     try {
-      await api.addPlan({ symbol: hit.symbol, name: hit.name, amount: amount.replace(",", "."), currency, frequency, start, active: true });
+      if (editing) await api.updatePlan(editing.id, body); else await api.addPlan(body);
       onDone();
     } catch (err) { setError(errorText(err)); }
   };
@@ -190,9 +215,22 @@ function AddPlan({ currency, onDone }: { currency: string; onDone: () => void })
         <Field label={t("invest.frequency")}><select className="field" value={frequency} onChange={(e) => setFrequency(e.target.value)}>
           {["weekly", "monthly", "quarterly"].map((f) => <option key={f} value={f}>{t(`invest.freq.${f}` as never)}</option>)}</select></Field>
       </div>
-      <Field label={t("invest.start")}><input className="field" type="date" value={start} onChange={(e) => setStart(e.target.value)} /></Field>
+      <div className="two">
+        <Field label={t("invest.payFrom")} hint={t("invest.payFromHint")}>
+          <select className="field" value={account} onChange={(e) => setAccount(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">—</option>
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.institution && a.institution !== a.name ? ` (${a.institution})` : ""}</option>)}
+          </select>
+        </Field>
+        <Field label={t("invest.dayOfMonth")}><input className="field num" inputMode="numeric" value={day} onChange={(e) => setDay(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="16" /></Field>
+      </div>
+      <div className="two">
+        <Field label={t("invest.start")}><input className="field" type="date" value={start} onChange={(e) => setStart(e.target.value)} /></Field>
+        <Field label={`${t("invest.end")} (${t("common.optional")})`}><input className="field" type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></Field>
+      </div>
       {error && <div className="error">{error}</div>}
-      <button className="btn big-btn">{t("common.add")}</button>
+      <button className="btn big-btn">{editing ? t("common.save") : t("common.add")}</button>
+      {editing && <button type="button" className="btn ghost danger" onClick={async () => { await api.deletePlan(editing.id); onDone(); }}><Icon name="trash" size={16} /> {t("common.delete")}</button>}
     </form>
   );
 }

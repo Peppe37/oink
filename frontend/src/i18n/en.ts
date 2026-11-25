@@ -559,6 +559,19 @@ export const en = {
   "wizard.cash": "Cash",
   "wizard.balanceFromStatement": "Leave it empty if you upload the statement: Oink takes the closing balance from it.",
   "accounts.linkedEmpty": "The bank showed no account. With a free Enable Banking app, first enable your accounts in its control panel (Link accounts), then link the bank here again.",
+  "invest.planSuggested_one": "{amount} goes out of {account} around day {day} every month: is it a savings plan?",
+  "invest.planSuggested_other": "{count} × {amount} go out of {account} around day {day} every month: savings plans?",
+  "invest.planSetUp": "Set it up",
+  "invest.onDay": "on day {day}",
+  "invest.until": "until {date}",
+  "invest.executions_one": "one purchase seen, ≈ {units} units",
+  "invest.executions_other": "{count} purchases seen, ≈ {units} units",
+  "invest.noExecutions": "no purchase found yet",
+  "invest.noAccount": "link the account it's paid from",
+  "invest.payFrom": "Paid from",
+  "invest.payFromHint": "Its debits there become the plan's purchases: not spending, and units counted.",
+  "invest.dayOfMonth": "Day of the month",
+  "invest.end": "End",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

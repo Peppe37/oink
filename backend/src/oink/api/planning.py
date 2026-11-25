@@ -12,11 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from oink.api.deps import Caller, get_db, require
-from oink.core.db import FixedCost, Holding, Plan, Report, RiskProfile
+from oink.core.db import Account, FixedCost, Holding, Plan, Report, RiskProfile, Transaction
 from oink.core.money import MoneyError, normalise_code
 from oink.services import planning
 from oink.services.ai import AI, AIError
 from oink.services.markets import MarketError, history, quote, search
+from oink.services.plans import match_executions, plan_positions, suggestions
 from oink.services.reports import Book
 from oink.services.simulate import (
     MonteCarlo,
@@ -176,19 +177,44 @@ class PlanIn(BaseModel):
     frequency: Frequency = "monthly"
     start: date
     active: bool = True
+    account_id: int | None = None
+    day: int | None = Field(default=None, ge=1, le=31)
+    end: date | None = None
 
 
-def _plan_out(p: Plan) -> dict[str, Any]:
+def _plan_out(p: Plan, positions: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     return {"id": p.id, "symbol": p.symbol, "name": p.name, "amount": str(p.amount),
             "currency": p.currency, "frequency": p.frequency, "start": p.start.isoformat(),
-            "active": p.active}  # fmt: skip
+            "active": p.active, "account_id": p.account_id, "day": p.day,
+            "end": p.end.isoformat() if p.end else None,
+            "position": {k: v for k, v in (positions or {}).get(p.id, {}).items() if k != "days"} or None}  # fmt: skip
+
+
+def _own_account_id(db: Session, who: Caller, account_id: int | None) -> int | None:
+    if account_id is None:
+        return None
+    acc = db.get(Account, account_id)
+    if acc is None or acc.user_id != who.user_id:
+        raise HTTPException(404, "account_unknown")
+    return acc.id
 
 
 @router.get("/plans")
-def plans(
+async def plans(
     who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
 ) -> list[dict[str, Any]]:
-    return [_plan_out(p) for p in db.scalars(select(Plan).where(Plan.user_id == who.user_id))]
+    positions = await plan_positions(db, who.user)
+    return [
+        _plan_out(p, positions) for p in db.scalars(select(Plan).where(Plan.user_id == who.user_id))
+    ]
+
+
+@router.get("/plans/suggestions")
+def plan_suggestions(
+    who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """Debits repeating every month with the same amount: probably a plan to set up."""
+    return suggestions(db, who.user)
 
 
 @router.post("/plans")
@@ -204,9 +230,11 @@ def add_plan(
         raise HTTPException(422, "currency_invalid") from exc
     p = Plan(user_id=who.user_id, symbol=body.symbol.strip().upper(), name=body.name[:160],
              amount=amount, currency=currency, frequency=body.frequency, start=body.start,
-             active=body.active)  # fmt: skip
+             active=body.active, account_id=_own_account_id(db, who, body.account_id),
+             day=body.day, end=body.end)  # fmt: skip
     db.add(p)
     db.commit()
+    match_executions(db, who.user)
     return _plan_out(p)
 
 
@@ -226,7 +254,13 @@ def update_plan(
         body.active,
     )
     p.amount = _dec(body.amount, "amount") or p.amount
+    p.account_id, p.day, p.end = _own_account_id(db, who, body.account_id), body.day, body.end
+    for tx in db.scalars(select(Transaction).where(Transaction.plan_id == p.id)):
+        tx.plan_id = None  # matched again below, with the plan's new terms
+        if tx.category_by == "plan":
+            tx.category, tx.category_by = "", ""
     db.commit()
+    match_executions(db, who.user)
     return _plan_out(p)
 
 
@@ -237,6 +271,10 @@ def delete_plan(
     p = db.get(Plan, plan_id)
     if p is None or p.user_id != who.user_id:
         raise HTTPException(404, "plan_unknown")
+    for tx in db.scalars(select(Transaction).where(Transaction.plan_id == p.id)):
+        tx.plan_id = None
+        if tx.category_by == "plan":
+            tx.category, tx.category_by = "", ""
     db.delete(p)
     db.commit()
     return {"ok": True}

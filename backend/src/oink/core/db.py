@@ -198,6 +198,8 @@ class Transaction(Base):
     fingerprint: Mapped[str] = mapped_column(String(40))
     #: the other leg of a transfer between own accounts (services/transfers.py)
     transfer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: an execution of this accumulation plan (services/plans.py)
+    plan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 
@@ -314,6 +316,13 @@ class Plan(Base):
     )  # weekly|monthly|quarterly
     start: Mapped[date] = mapped_column(Date)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: where the money is taken from (its debits are matched as the plan's executions),
+    #: on which day of the month, and until when (a plan replaced by another)
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end: Mapped[date | None] = mapped_column(Date, nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 
