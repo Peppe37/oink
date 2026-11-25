@@ -66,6 +66,7 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
   const [data, setData] = useState<FixedCosts | null>(null);
   const [adding, setAdding] = useState<{ name: string; amount: string; category: string } | null>(null);
   const [editing, setEditing] = useState<FixedItem | null>(null);
+  const [viewing, setViewing] = useState<FixedItem | null>(null);
   const [all, setAll] = useState(false);
   const FIRST = 5;
   const load = useCallback(() => { api.fixed().then(setData).catch((e) => notify(errorText(e))); }, [notify, errorText]);
@@ -79,8 +80,8 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
         <div><span className="muted small-text">{t("plan.perYear")}</span><div className="mid num faint">{fmt.money(data.yearly, data.currency, { compact: true })}</div></div></div>
       <div className="list">
         {(all ? data.items : data.items.slice(0, FIRST)).map((f) => (
-          <Row key={f.id} icon={<CategoryTile category={f.category || "bills"} size={36} />} title={f.name}
-            detail={`${fmt.money(f.amount, f.currency)} · ${t(`invest.freq.${f.frequency}` as never)}${f.next_due ? ` · ${fmt.date(f.next_due)}` : ""}`}
+          <Row key={f.id} icon={<CategoryTile category={f.category || "bills"} size={36} />} title={f.name} onClick={() => setViewing(f)}
+            detail={`${fmt.money(f.amount, f.currency)} · ${t(`invest.freq.${f.frequency}` as never)}${f.next_due ? ` · ${fmt.date(f.next_due)}` : ""}${f.active ? "" : ` · ${t("plan.ended")}`}`}
             right={<span className="row" style={{ gap: 2 }}><span className="num">{fmt.money(f.per_month, data.currency)}</span>
               <button className="icon-btn" aria-label={t("common.edit")} onClick={() => setEditing(f)}><Icon name="pencil" size={16} /></button>
               <button className="icon-btn" aria-label={t("common.delete")} onClick={async () => { await api.deleteFixed(f.id); load(); }}><Icon name="trash" size={16} /></button></span>} />
@@ -104,6 +105,9 @@ export function FixedCard({ notify }: { notify: (s: string) => void }) {
       )}
       <Sheet open={!!adding} onClose={() => setAdding(null)} title={t("plan.addFixed")}>
         {adding && <FixedForm initial={adding} currency={data.currency} onDone={() => { setAdding(null); load(); }} />}
+      </Sheet>
+      <Sheet open={!!viewing} onClose={() => setViewing(null)} title={viewing?.name}>
+        {viewing && <FixedHistory item={viewing} onEdit={() => { setEditing(viewing); setViewing(null); }} onStopped={() => { setViewing(null); load(); }} />}
       </Sheet>
       <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing?.name}>
         {editing && <FixedEdit item={editing} onDone={() => { setEditing(null); load(); notify(t("docs.saved")); }} />}
@@ -142,6 +146,35 @@ function FixedForm({ initial, currency, onDone }: { initial: { name: string; amo
       {error && <div className="error">{error}</div>}
       <button className="btn big-btn">{t("common.save")}</button>
     </form>
+  );
+}
+
+/** A fixed cost's payments, its next due date, and «this cost is over». */
+function FixedHistory({ item, onEdit, onStopped }: { item: FixedItem; onEdit: () => void; onStopped: () => void }) {
+  const { t, fmt } = useI18n();
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.fixedPayments>> | null>(null);
+  useEffect(() => { api.fixedPayments(item.id).then(setData).catch(() => undefined); }, [item.id]);
+  return (
+    <div className="stack">
+      <div className="stat-row">
+        <div><span className="muted small-text">{t("plan.amount")}</span><div className="mid num">{fmt.money(item.amount, item.currency)}</div><span className="faint small-text">{t(`invest.freq.${item.frequency}` as never)}</span></div>
+        <div><span className="muted small-text">{t("plan.nextDue")}</span><div className="mid">{data?.next_due ? fmt.date(data.next_due, { day: "numeric", month: "long" }) : "—"}</div></div>
+        {data && <div><span className="muted small-text">{t("plan.paidSoFar", { count: data.count })}</span><div className="mid num">{fmt.money(data.total, item.currency)}</div></div>}
+      </div>
+      {!data ? <Spinner /> : data.payments.length === 0 ? <p className="muted">{t("plan.noPayments")}</p> : (
+        <div className="list">
+          {data.payments.map((p) => (
+            <div key={p.id} className="item"><span className="item-main"><span className="row-text"><span className="row-title ellipsis">{p.name}</span>
+              <span className="row-detail">{fmt.date(p.day, { day: "numeric", month: "long", year: "numeric" })}</span></span>
+              <span className="num">{fmt.money(p.amount, p.currency)}</span></span></div>
+          ))}
+        </div>
+      )}
+      <div className="row between wrap" style={{ gap: 8 }}>
+        <button className="btn ghost" onClick={onEdit}><Icon name="pencil" size={16} /> {t("common.edit")}</button>
+        {item.active && <button className="btn ghost danger" onClick={async () => { await api.stopFixed(item.id); onStopped(); }}>{t("plan.stop")}</button>}
+      </div>
+    </div>
   );
 }
 

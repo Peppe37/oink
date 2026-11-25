@@ -282,6 +282,7 @@ export const en = {
   "category.bills": "Bills",
   "category.transport": "Transport",
   "category.car": "Car",
+  "category.fuel": "Fuel",
   "category.health": "Health",
   "category.leisure": "Leisure",
   "category.travel": "Travel",
@@ -657,6 +658,16 @@ export const en = {
   "review.applied_other": "{count} changes applied",
   "reports.regenerate": "Regenerate",
   "reports.month": "Month",
+  "movements.payee": "Payee",
+  "movements.payeeHint": "The bank only gave a code? Write the real name: with «remember» it's used for the same code from now on.",
+  "plan.amount": "Amount",
+  "plan.paidSoFar_one": "One payment so far",
+  "plan.paidSoFar_other": "{count} payments so far",
+  "plan.noPayments": "No payment found yet in your movements.",
+  "plan.stop": "This cost is over",
+  "plan.ended": "ended",
+  "plan.missing": "{name} ({amount}) was expected on {date} and hasn't come.",
+  "plan.wait": "Wait",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

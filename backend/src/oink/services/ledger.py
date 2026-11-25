@@ -23,6 +23,7 @@ CATEGORIES = [
     "bills",
     "transport",
     "car",
+    "fuel",
     "health",
     "leisure",
     "travel",
@@ -75,12 +76,36 @@ class AddResult:
     duplicates: int
 
 
-def rule_category(rules: list[Rule], text: str) -> str:
+#: Payees every Italian (and European) statement shows: known without asking anyone.
+BUILTIN = {
+    "fuel": ("italiana petroli", "ip stazione", "eni station", "enilive", "eni live", "agip", "q8 ",
+             "kuwait petroleum", "esso", "tamoil", "shell", "repsol", "total erg", "totalenergies",
+             "carburant", "benzina", "distributore", "self service carb", "beyfin", "conad self"),
+}  # fmt: skip
+
+
+def rule_for(rules: list[Rule], text: str, field: str = "name") -> Rule | None:
+    """The most specific rule that matches and sets `field` (name or category)."""
     low = normalise(text)
-    for rule in sorted(rules, key=lambda r: -len(r.pattern)):  # the most specific wins
-        if rule.pattern in low:
-            return rule.category
-    return ""
+    for rule in sorted(rules, key=lambda r: -len(r.pattern)):
+        if rule.pattern in low and getattr(rule, field):
+            return rule
+    return None
+
+
+def rule_category(rules: list[Rule], text: str) -> str:
+    found = rule_for(rules, text, "category")
+    if found is not None:
+        return found.category
+    low = f" {normalise(text)} "
+    return next((cat for cat, words in BUILTIN.items() if any(w in low for w in words)), "")
+
+
+_DESCRIPTOR = re.compile(r"^\d{3,}\s")  # «44941 Palo Del Colle - S»: a terminal, not a name
+
+
+def looks_like_terminal(text: str) -> bool:
+    return bool(_DESCRIPTOR.match(text.strip()))
 
 
 def add_movements(
@@ -122,7 +147,11 @@ def add_movements(
             same[(tx.day, tx.amount)] += 1
             if tx.source != source:
                 other[(tx.day, tx.amount)] += 1
-            if not tx.description.strip("—- ") and not tx.counterparty:
+            if (not tx.description.strip("—- ") and not tx.counterparty) or (
+                source == "import"
+                and tx.source == "linked"
+                and looks_like_terminal(tx.counterparty or tx.description)
+            ):
                 blank.setdefault((tx.day, tx.amount), []).append(tx)
 
     def enrich(at: tuple[date, int], m: NewMovement) -> None:
@@ -170,6 +199,9 @@ def add_movements(
         category, by = m.category, "user" if m.category else ""
         if not category and (found := rule_category(rules, f"{m.description} {m.counterparty}")):
             category, by = found, "rule"
+        named = rule_for(rules, f"{m.description} {m.counterparty}")
+        if named is not None and named.name:
+            m.counterparty = named.name
         tx = Transaction(
             user_id=account.user_id,
             account_id=account.id,
@@ -202,6 +234,32 @@ def add_movements(
 
             match_executions(db, user)
     return AddResult(added=added, duplicates=duplicates)
+
+
+def learn_name(db: Session, tx: Transaction, name: str) -> int:
+    """«This payee is really X»: rename it here and in every movement with the same code,
+    now and from now on. Returns how many movements were renamed."""
+    pattern = normalise(
+        tx.description
+        if looks_like_terminal(tx.description)
+        else (tx.counterparty or tx.description)
+    )[:60]
+    if len(pattern) < 3:
+        tx.counterparty = name
+        db.commit()
+        return 1
+    rule = db.scalar(select(Rule).where(Rule.user_id == tx.user_id, Rule.pattern == pattern))
+    if rule is None:
+        db.add(Rule(user_id=tx.user_id, pattern=pattern, category="", name=name))
+    else:
+        rule.name = name
+    renamed = 0
+    for other in db.scalars(select(Transaction).where(Transaction.user_id == tx.user_id)):
+        if pattern in normalise(f"{other.description} {other.counterparty}"):
+            other.counterparty = name
+            renamed += 1
+    db.commit()
+    return renamed
 
 
 def learn_rule(db: Session, tx: Transaction, category: str) -> None:

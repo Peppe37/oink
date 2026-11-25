@@ -16,6 +16,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   const [data, setData] = useState<Overview | null>(null);
   const [moved, setMoved] = useState<{ institution: string; currency: string; count: number; total: string }[]>([]);
   useEffect(() => { api.untrackedTransfers().then(setMoved).catch(() => undefined); }, []);
+  const [missing, setMissing] = useState<{ id: number; name: string; amount: string; currency: string; due: string }[]>([]);
+  useEffect(() => { api.missingFixed().then(setMissing).catch(() => undefined); }, []);
   const [plansFound, setPlansFound] = useState(0);
   useEffect(() => { api.planProposals().then((p) => setPlansFound(p.length)).catch(() => undefined); }, []);
   const [report, setReport] = useState<Report | null>(null);
@@ -64,6 +66,18 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
           </Glass>
         </motion.div>
       )}
+
+      {missing.map((m) => (
+        <motion.div variants={rise} key={`missing-${m.id}`}>
+          <Glass className="banner" variant="tight">
+            <span className="row" style={{ gap: 10 }}><Icon name="bills" /> {t("plan.missing", { name: m.name, amount: fmt.money(m.amount, m.currency), date: fmt.date(m.due, { day: "numeric", month: "long" }) })}</span>
+            <span className="row" style={{ gap: 6 }}>
+              <button className="btn ghost small" onClick={async () => { await api.waitFixed(m.id); setMissing((x) => x.filter((y) => y.id !== m.id)); }}>{t("plan.wait")}</button>
+              <button className="btn ghost small" onClick={async () => { await api.stopFixed(m.id); setMissing((x) => x.filter((y) => y.id !== m.id)); }}>{t("plan.stop")}</button>
+            </span>
+          </Glass>
+        </motion.div>
+      ))}
 
       {plansFound > 0 && (
         <motion.div variants={rise}>

@@ -276,6 +276,8 @@ class Rule(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     pattern: Mapped[str] = mapped_column(String(120))
     category: Mapped[str] = mapped_column(String(40))
+    #: the payee's real name, when the bank shows a terminal code («44941 Palo Del Colle - S»)
+    name: Mapped[str] = mapped_column(String(120), default="")
 
 
 class Rate(Base):
@@ -366,6 +368,8 @@ class FixedCost(Base):
     next_due: Mapped[date | None] = mapped_column(Date, nullable=True)
     match: Mapped[str] = mapped_column(String(120), default="")  # text that finds its payments
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: «wait»: a missing payment isn't flagged again until this day
+    snoozed_until: Mapped[date | None] = mapped_column(Date, nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

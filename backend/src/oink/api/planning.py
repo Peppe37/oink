@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from oink.api.deps import Caller, get_db, require
 from oink.core.db import Account, FixedCost, Holding, Plan, Report, RiskProfile, Transaction
 from oink.core.money import MoneyError, normalise_code
+from oink.services import fixed as fixed_service
 from oink.services import planning
 from oink.services.ai import AI, AIError
 from oink.services.markets import MarketError, history, quote, search
@@ -451,6 +452,56 @@ def add_fixed(
     db.add(f)
     db.commit()
     return {"id": f.id}
+
+
+@router.get("/fixed-costs/missing")
+def missing_fixed(
+    who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """Fixed costs whose payment didn't come when expected."""
+    return fixed_service.refresh(db, who.user)
+
+
+@router.get("/fixed-costs/{cost_id}/payments")
+def fixed_payments(
+    cost_id: int, who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    fixed_service.refresh(db, who.user)  # due date moved past the payments that came
+    return fixed_service.history(db, who.user, f)
+
+
+class SnoozeIn(BaseModel):
+    days: int = Field(default=7, ge=1, le=90)
+
+
+@router.post("/fixed-costs/{cost_id}/wait")
+def wait_fixed(
+    cost_id: int, body: SnoozeIn, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:  # fmt: skip
+    """«It will come»: don't flag it again for a while."""
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    f.snoozed_until = date.today() + timedelta(days=body.days)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/fixed-costs/{cost_id}/stop")
+def stop_fixed(
+    cost_id: int, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """«This cost is over» (cancelled subscription): kept in the history, no longer expected."""
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    f.active = False
+    db.commit()
+    return {"ok": True}
 
 
 class SplitPart(BaseModel):

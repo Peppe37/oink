@@ -206,19 +206,22 @@ function TxSheet({ tx, onClose, onSaved, onDeleted }: { tx: Tx | null; onClose: 
   const [note, setNote] = useState("");
   const [learn, setLearn] = useState(true);
   const [allCats, setAllCats] = useState(false);
+  const [name, setName] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
     if (!tx) return;
     setCategory(tx.category);
     setCustom(tx.category && !CATEGORIES.includes(tx.category) ? tx.category : "");
     setNote(tx.note);
+    setName(tx.counterparty || tx.description);
     setError("");
   }, [tx]);
   if (!tx) return <Sheet open={false} onClose={onClose}>{null}</Sheet>;
 
   const save = async () => {
     try {
-      onSaved(await api.patchTx(tx.id, { category: custom.trim() || category, note, learn }));
+      const renamed = name.trim() && name.trim() !== (tx.counterparty || tx.description) ? name.trim() : undefined;
+      onSaved(await api.patchTx(tx.id, { category: custom.trim() || category, note, learn, counterparty: renamed }));
     } catch (e) {
       setError(errorText(e));
     }
@@ -253,6 +256,7 @@ function TxSheet({ tx, onClose, onSaved, onDeleted }: { tx: Tx | null; onClose: 
       <div className="stack">
         <input className="field" placeholder={t("movements.customCategory")} value={custom} onChange={(e) => setCustom(e.target.value)} maxLength={40} />
         <label className="check"><input type="checkbox" checked={learn} onChange={(e) => setLearn(e.target.checked)} /> {t("movements.learn")}</label>
+        <Field label={t("movements.payee")} hint={t("movements.payeeHint")}><input className="field" value={name} onChange={(e) => setName(e.target.value)} maxLength={200} /></Field>
         <Field label={t("movements.note")}><textarea className="field" rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         {error && <div className="error">{error}</div>}
         <div className="row between">

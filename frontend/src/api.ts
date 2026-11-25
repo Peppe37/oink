@@ -137,7 +137,7 @@ export const api = {
 
   transactions: (params: Record<string, string | number | undefined>) => call<Tx[]>(`/transactions?${query(params)}`),
   addTx: (body: { account_id: number; day: string; amount: string; description: string; category?: string; note?: string }) => call<Tx>("/transactions", { method: "POST", body: json(body) }),
-  patchTx: (id: number, body: { category?: string; note?: string; learn?: boolean }) => call<Tx>(`/transactions/${id}`, { method: "PATCH", body: json(body) }),
+  patchTx: (id: number, body: { category?: string; note?: string; learn?: boolean; counterparty?: string }) => call<Tx>(`/transactions/${id}`, { method: "PATCH", body: json(body) }),
   deleteTx: (id: number) => call(`/transactions/${id}`, { method: "DELETE" }),
   categories: () => call<{ builtin: string[]; custom: string[] }>("/categories"),
   categorize: () => call<{ categorized: number }>("/transactions/categorize", { method: "POST" }),
@@ -216,6 +216,10 @@ export const api = {
   deleteFixed: (id: number) => call(`/fixed-costs/${id}`, { method: "DELETE" }),
   updateFixed: (id: number, body: { name: string; amount: string; currency: string; frequency: string; category?: string; next_due?: string | null; match?: string; active?: boolean }) =>
     call(`/fixed-costs/${id}`, { method: "PUT", body: json(body) }),
+  fixedPayments: (id: number) => call<{ payments: { id: number; day: string; amount: string; currency: string; name: string }[]; count: number; total: string; next_due: string | null }>(`/fixed-costs/${id}/payments`),
+  missingFixed: () => call<{ id: number; name: string; amount: string; currency: string; due: string; days_late: number }[]>("/fixed-costs/missing"),
+  waitFixed: (id: number, days = 7) => call(`/fixed-costs/${id}/wait`, { method: "POST", body: json({ days }) }),
+  stopFixed: (id: number) => call(`/fixed-costs/${id}/stop`, { method: "POST" }),
   splitFixed: (id: number, parts: { name: string; amount: string; frequency: string; next_due?: string | null }[]) =>
     call<{ ids: number[] }>(`/fixed-costs/${id}/split`, { method: "POST", body: json({ parts }) }),
   risk: () => call<Risk>("/profile/risk"),

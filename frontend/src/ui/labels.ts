@@ -1,6 +1,6 @@
 import type { T } from "../i18n";
 
-export const CATEGORIES = ["groceries", "restaurants", "home", "bills", "transport", "car", "health", "leisure", "travel",
+export const CATEGORIES = ["groceries", "restaurants", "home", "bills", "transport", "car", "fuel", "health", "leisure", "travel",
   "subscriptions", "shopping", "education", "gifts", "taxes", "fees", "loans", "salary", "income", "transfers", "savings",
   "investments", "crypto", "other"];
 export const KINDS = ["checking", "savings", "card", "cash", "investment", "crypto"] as const;

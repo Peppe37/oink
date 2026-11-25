@@ -340,3 +340,77 @@ def test_the_review_proposes_fixed_costs_and_categories(owner: TestClient) -> No
     ]
     groceries = next(c for c in reply["categories"] if c["tx_id"] == lone["id"])
     assert groceries["proposed"] == "groceries" and groceries["reason"] == "same_payee"
+
+
+def test_fixed_costs_follow_their_payments_and_flag_a_missing_one(owner: TestClient) -> None:
+    from datetime import date, timedelta
+
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "100"}).json()
+    today = date.today()
+    for back in (75, 45, 15):  # paid every month
+        day = (today - timedelta(days=back)).isoformat()
+        owner.post(
+            "/api/transactions",
+            json={
+                "account_id": acc["id"],
+                "day": day,
+                "amount": "-9.99",
+                "description": "Netflix.com",
+            },
+        )
+    cost = owner.post(
+        "/api/fixed-costs",
+        json={
+            "name": "Netflix",
+            "amount": "9.99",
+            "currency": "EUR",
+            "frequency": "monthly",
+            "match": "netflix",
+        },
+    ).json()
+    history = owner.get(f"/api/fixed-costs/{cost['id']}/payments").json()
+    assert history["count"] == 3 and history["next_due"] is not None
+    assert owner.get("/api/fixed-costs/missing").json() == []  # next one is in the future
+    gym = owner.post("/api/fixed-costs", json={"name": "Palestra", "amount": "39.90", "currency": "EUR", "frequency": "monthly",
+                                                "match": "fitclub", "next_due": (today - timedelta(days=12)).isoformat()}).json()  # fmt: skip
+    assert [m["id"] for m in owner.get("/api/fixed-costs/missing").json()] == [gym["id"]]
+    owner.post(f"/api/fixed-costs/{gym['id']}/wait", json={"days": 7})
+    assert owner.get("/api/fixed-costs/missing").json() == []
+
+
+def test_a_terminal_code_gets_its_real_name_and_fuel_is_known(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "100"}).json()
+    first = owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-11-23",
+            "amount": "-15.10",
+            "description": "44941 Palo Del Colle - S",
+        },
+    ).json()
+    renamed = owner.patch(
+        f"/api/transactions/{first['id']}",
+        json={"counterparty": "IP Italiana Petroli", "category": "fuel", "learn": True},
+    ).json()
+    assert renamed["counterparty"] == "IP Italiana Petroli" and renamed["category"] == "fuel"
+    later = owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-11-30",
+            "amount": "-40",
+            "description": "44941 Palo Del Colle - S",
+        },
+    ).json()
+    assert later["counterparty"] == "IP Italiana Petroli" and later["category"] == "fuel"
+    eni = owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-11-28",
+            "amount": "-30",
+            "description": "Enilive Station Bari",
+        },
+    ).json()
+    assert eni["category"] == "fuel"

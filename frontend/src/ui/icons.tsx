@@ -45,6 +45,7 @@ const P: Record<string, ReactNode> = {
   bills: <path d="M13 3 5.5 13.2H12l-1 7.8 7.5-10.2H12z" />,
   transport: <><rect x="6" y="3.5" width="12" height="13" rx="3" /><path d="M6 10.5h12" /><circle cx="9" cy="13.5" r=".9" /><circle cx="15" cy="13.5" r=".9" /><path d="m8 16.5-2 4" /><path d="m16 16.5 2 4" /><path d="M9.5 6.5h5" /></>,
   car: <><path d="M4 15.5v-3.2l1.8-4.6c.3-.7.9-1.2 1.7-1.2h9c.8 0 1.4.5 1.7 1.2l1.8 4.6v3.2" /><path d="M3.5 12.3h17" /><rect x="3.5" y="12.3" width="17" height="4.7" rx="1.5" /><path d="M6 17v2" /><path d="M18 17v2" /><circle cx="7.5" cy="14.6" r=".8" /><circle cx="16.5" cy="14.6" r=".8" /></>,
+  fuel: <><path d="M5 20V5.5C5 4.7 5.7 4 6.5 4h6c.8 0 1.5.7 1.5 1.5V20" /><path d="M3.5 20h12" /><path d="M7.5 7.5h4v3.5h-4z" /><path d="M14 9.5h1.6c.8 0 1.4.6 1.4 1.4v5.4a1.3 1.3 0 0 0 2.6 0V8.6L17 6" /></>,
   health: <><path d="M12 20s-7.5-4.4-7.5-10A4.2 4.2 0 0 1 12 7.3 4.2 4.2 0 0 1 19.5 10c0 5.6-7.5 10-7.5 10z" /><path d="M7.5 12.5h2.3l1.3-2.3 1.8 4 1.2-1.7h2.4" /></>,
   leisure: <><path d="M4 8.5c0-.8.7-1.5 1.5-1.5h13c.8 0 1.5.7 1.5 1.5v1.8a1.8 1.8 0 0 0 0 3.4v1.8c0 .8-.7 1.5-1.5 1.5h-13c-.8 0-1.5-.7-1.5-1.5v-1.8a1.8 1.8 0 0 0 0-3.4z" /><path d="M14.5 7v10" strokeDasharray="1.6 1.8" /></>,
   travel: <path d="M10.5 13.5 4 11.2l1.2-1.6 7 .7 4.4-4.7c.8-.8 2.2-.9 2.8-.3.6.6.5 2-.3 2.8l-4.7 4.4.7 7-1.6 1.2-2.3-6.5-3.4 3.2.3 2-1.2 1-1.4-3-3-1.4 1-1.2 2 .3z" />,
@@ -88,7 +89,7 @@ export function Icon({ name, size = 22, stroke = 1.75, style, className }: { nam
 /** Colour of each category: a hue pair for the tile's gradient. */
 export const CATEGORY_COLORS: Record<string, [string, string]> = {
   groceries: ["#43e5b5", "#0fa37f"], restaurants: ["#ffb26b", "#f0703c"], home: ["#a08bff", "#6a4fe6"],
-  bills: ["#ffd76a", "#f2a71b"], transport: ["#6cc9ff", "#2f86e8"], car: ["#7ea5ff", "#4a63e0"],
+  bills: ["#ffd76a", "#f2a71b"], transport: ["#6cc9ff", "#2f86e8"], car: ["#7ea5ff", "#4a63e0"], fuel: ["#ffb35c", "#e0651b"],
   health: ["#ff8aa0", "#e8456a"], leisure: ["#ff86c8", "#d9479a"], travel: ["#5fe1ff", "#1aa3d6"],
   subscriptions: ["#cf95ff", "#9550e8"], shopping: ["#ffa3cf", "#ec5ea4"], education: ["#a8e66b", "#5fae24"],
   gifts: ["#ff9b9b", "#e85a5a"], taxes: ["#c4c4d4", "#7f7f97"], fees: ["#b6b2c6", "#7a7590"], loans: ["#ff9f9f", "#d6455c"],

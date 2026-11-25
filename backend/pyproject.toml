@@ -62,4 +62,5 @@ plugins = ["pydantic.mypy"]
 "src/oink/migrations/*" = ["E501"]
 "src/oink/services/verify.py" = ["E501"]  # one rule per line, in five languages
 "src/oink/services/stores.py" = ["E501"]
-"src/oink/services/review.py" = ["E501"]  # Cypher reads better on one line
+"src/oink/services/review.py" = ["E501"]
+"src/oink/services/fixed.py" = ["E501"]  # Cypher reads better on one line

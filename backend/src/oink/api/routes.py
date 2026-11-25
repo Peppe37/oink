@@ -86,7 +86,14 @@ from oink.services.connections import (
 )
 from oink.services.importer import ImportError_, parse_statement
 from oink.services.jobs import categorize_pending, monthly_report
-from oink.services.ledger import CATEGORIES, INTERNAL, NewMovement, add_movements, learn_rule
+from oink.services.ledger import (
+    CATEGORIES,
+    INTERNAL,
+    NewMovement,
+    add_movements,
+    learn_name,
+    learn_rule,
+)
 from oink.services.review import review
 from oink.services.statements import MAX_FILE, apply, pick_account
 from oink.services.transfers import match_transfers, untracked
@@ -636,6 +643,12 @@ def update_transaction(
             learn_rule(db, tx, tx.category)
     if body.note is not None:
         tx.note = body.note
+    if body.counterparty is not None and body.counterparty.strip():
+        name = body.counterparty.strip()
+        if body.learn:
+            learn_name(db, tx, name)  # every movement with the same code, now and later
+        else:
+            tx.counterparty = name
     db.commit()
     return TransactionOut.of(tx)
 

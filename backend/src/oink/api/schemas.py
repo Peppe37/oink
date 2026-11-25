@@ -151,6 +151,7 @@ class TransactionIn(BaseModel):
 
 class TransactionPatch(BaseModel):
     category: str | None = Field(default=None, max_length=40)
+    counterparty: str | None = Field(default=None, max_length=200)  # the payee's real name
     note: str | None = None
     learn: bool = True  # also apply the category to this merchant in the future
 
