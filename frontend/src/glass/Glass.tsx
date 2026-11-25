@@ -138,17 +138,15 @@ function LensFilter({ id, maps, w, h, strength, edgeOnly }: { id: string; maps: 
       <filter id={id} x="0" y="0" width={w} height={h} filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
         <feImage href={maps.displacement} x="0" y="0" width={w} height={h} preserveAspectRatio="none" result="map" />
         <feImage href={maps.rim} x="0" y="0" width={w} height={h} preserveAspectRatio="none" result="rim" />
-        <feGaussianBlur in="SourceGraphic" stdDeviation="0.8" result="soft" />
-        <feDisplacementMap in="soft" in2="map" scale={strength} xChannelSelector="R" yChannelSelector="G" result="dr" />
-        <feDisplacementMap in="soft" in2="map" scale={strength * 0.92} xChannelSelector="R" yChannelSelector="G" result="dg" />
-        <feDisplacementMap in="soft" in2="map" scale={strength * 0.84} xChannelSelector="R" yChannelSelector="G" result="db" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength} xChannelSelector="R" yChannelSelector="G" result="dr" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength * 0.92} xChannelSelector="R" yChannelSelector="G" result="dg" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength * 0.84} xChannelSelector="R" yChannelSelector="G" result="db" />
         <feColorMatrix in="dr" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r" />
         <feColorMatrix in="dg" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g" />
         <feColorMatrix in="db" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b" />
         <feBlend in="r" in2="g" mode="screen" result="rg" />
         <feBlend in="rg" in2="b" mode="screen" result="bent" />
-        <feGaussianBlur in="bent" stdDeviation="0.4" result="bentSoft" />
-        <feComposite in="bentSoft" in2="rim" operator="in" result="edge" />
+        <feComposite in="bent" in2="rim" operator="in" result="edge" />
         {!edgeOnly && <feComposite in="edge" in2="SourceGraphic" operator="over" />}
       </filter>
     </svg>
@@ -189,7 +187,8 @@ export function Glass({ refract = false, strength = 34, radius = 26, variant, fr
   const id = useId().replace(/:/g, "");
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [maps, setMaps] = useState<Maps | null>(null);
-  const lens = backdropLens || refract;
+  // The lens costs a filter pass every frame the backdrop changes: only the panes that ask.
+  const lens = refract;
 
   useLayoutEffect(() => {
     if (!lens || !ref.current) return;
@@ -208,8 +207,11 @@ export function Glass({ refract = false, strength = 34, radius = 26, variant, fr
     if (!size || size.w < 8 || size.h < 8) return;
     const r = Math.min(corner, size.h / 2, size.w / 2);
     const bezel = Math.min(26, size.h / 2.2, size.w / 2.2);
-    const frame = requestAnimationFrame(() => setMaps(lensMaps(size.w, size.h, r, bezel)));
-    return () => cancelAnimationFrame(frame);
+    // Debounced: while the dock magnifies, its size changes every frame; the old map is
+    // stretched meanwhile, which nobody can see.
+    const timer = setTimeout(() => setMaps(lensMaps(size.w, size.h, r, bezel)), maps ? 160 : 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, corner]);
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -221,10 +223,14 @@ export function Glass({ refract = false, strength = 34, radius = 26, variant, fr
 
   const ready = lens && maps && size;
   const tail = `${frost ? ` blur(${frost}px)` : ""} saturate(${frost ? 180 : 150}%) brightness(1.05)`;
+  // Plain panes get no backdrop filter at all: clear glass is a tint and a rim, and costs
+  // nothing while the background moves or the page scrolls.
   const layerStyle: CSSProperties =
     ready && backdropLens
       ? { backdropFilter: `url(#lg-${id})${tail}`, WebkitBackdropFilter: `url(#lg-${id})${tail}` }
-      : { backdropFilter: tail.trim(), WebkitBackdropFilter: tail.trim() };
+      : lens || frost
+        ? { backdropFilter: tail.trim(), WebkitBackdropFilter: tail.trim() }
+        : {};
   const classes = ["glass", frost ? "frosted" : "", variant ?? "", press ? "press" : "", className].filter(Boolean).join(" ");
 
   return (
