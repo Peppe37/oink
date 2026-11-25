@@ -75,7 +75,14 @@ from oink.providers.enablebanking import COUNTRIES, EnableBanking
 from oink.services import fx, updates
 from oink.services import reports as rep
 from oink.services.ai import AI, AIError
-from oink.services.connections import banking, finish_bank, link_with_key, save_banking, sync
+from oink.services.connections import (
+    banking,
+    finish_bank,
+    forget_pending,
+    link_with_key,
+    save_banking,
+    sync,
+)
 from oink.services.importer import ImportError_, parse_statement
 from oink.services.jobs import categorize_pending, monthly_report
 from oink.services.ledger import CATEGORIES, INTERNAL, NewMovement, add_movements, learn_rule
@@ -832,6 +839,7 @@ async def link_bank(
     bank = banking(db, settings_of(request))
     if bank is None:
         raise HTTPException(503, "banking_off")
+    forget_pending(db, who.user_id)
     state = secrets.token_urlsafe(24)
     db.add(Connection(user_id=who.user_id, provider="enablebanking", label=body.bank, state=state))
     db.commit()
@@ -859,11 +867,17 @@ async def bank_callback(
     if conn is None or bank is None or not code:
         return RedirectResponse(f"/accounts?linked=error&reason={error or 'state'}", 303)
     try:
-        await finish_bank(db, vault_of(request), bank, conn, code)
+        accounts = await finish_bank(db, vault_of(request), bank, conn, code)
     except ProviderError:
         conn.status = "error"
         db.commit()
         return RedirectResponse("/accounts?linked=error", 303)
+    if not accounts:
+        # the bank said yes but showed no account: with a free (restricted) Enable Banking
+        # app only the accounts linked in its control panel are visible
+        db.delete(conn)
+        db.commit()
+        return RedirectResponse("/accounts?linked=empty", 303)
     await sync(db, vault_of(request), conn, bank)
     return RedirectResponse("/accounts?linked=ok", 303)
 

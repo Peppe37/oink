@@ -9,6 +9,7 @@ Each request is signed with a short-lived RS256 JWT (the app id is the key id).
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -20,8 +21,12 @@ from oink.core.money import MoneyError, to_minor
 from oink.providers.base import ProviderError, RemoteAccount
 from oink.services.ledger import NewMovement
 
+log = logging.getLogger("oink.enablebanking")
 API = "https://api.enablebanking.com"
-CONSENT_DAYS = 180
+CONSENT_DAYS = 180  # asked for, capped by what each bank allows (Trade Republic: 90)
+#: How far back the first sync looks: right after the login (strong authentication) banks
+#: give their whole history; each is tried until the bank accepts it.
+HISTORY_DAYS = (730, 540, 365, 180, 89)
 COUNTRIES = ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR",
              "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO", "PL",
              "PT", "RO", "SE", "SI", "SK"]  # fmt: skip
@@ -58,6 +63,15 @@ class EnableBanking:
         finally:
             if self._client is None:
                 await client.aclose()
+        if response.status_code >= 400:
+            # the bank's or Enable Banking's own words, for the log (never shown raw)
+            log.warning(
+                "Enable Banking %s %s → %s %s",
+                method,
+                path.split("?")[0],
+                response.status_code,
+                response.text[:300],
+            )
         if response.status_code in (401, 403):
             raise ProviderError("credentials_rejected")
         if response.status_code >= 400:
@@ -75,9 +89,22 @@ class EnableBanking:
             for a in data.get("aspsps", [])
         ]
 
+    async def consent_days(self, bank: str, country: str) -> int:
+        """The longest consent this bank accepts (Enable Banking rejects a longer one)."""
+        try:
+            data = await self._call("GET", "/aspsps", params={"country": country})
+        except ProviderError:
+            return 89
+        for aspsp in data.get("aspsps", []):
+            if aspsp.get("name") == bank:
+                seconds = aspsp.get("maximum_consent_validity") or CONSENT_DAYS * 86400
+                return max(1, min(CONSENT_DAYS, int(seconds) // 86400 - 1))
+        return 89
+
     async def start(self, bank: str, country: str, state: str, redirect_url: str) -> str:
         """The bank's login page the user must open."""
-        valid = (datetime.now(UTC) + timedelta(days=CONSENT_DAYS)).isoformat()
+        days = await self.consent_days(bank, country)
+        valid = (datetime.now(UTC) + timedelta(days=days)).isoformat()
         data = await self._call(
             "POST",
             "/auth",
@@ -126,6 +153,16 @@ class EnableBanking:
             except (KeyError, MoneyError):
                 continue
         return None
+
+    async def history(self, uid: str, currency: str) -> list[NewMovement]:
+        """As much past as the bank gives: right after the login most give years."""
+        last: ProviderError | None = None
+        for days in HISTORY_DAYS:
+            try:
+                return await self.movements(uid, currency, date.today() - timedelta(days=days))
+            except ProviderError as exc:
+                last = exc
+        raise last or ProviderError("history_unavailable")
 
     async def movements(self, uid: str, currency: str, since: date) -> list[NewMovement]:
         found: list[NewMovement] = []

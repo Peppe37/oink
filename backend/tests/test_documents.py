@@ -220,11 +220,18 @@ def test_a_statement_of_an_unknown_account_proposes_it_filled_in(owner: TestClie
 
 
 def test_a_hand_made_account_fills_from_its_statement(owner: TestClient) -> None:
-    acc = owner.post("/api/accounts", json={"name": "Intesa", "institution": "Intesa Sanpaolo", "kind": "checking"}).json()
+    acc = owner.post(
+        "/api/accounts",
+        json={"name": "Intesa", "institution": "Intesa Sanpaolo", "kind": "checking"},
+    ).json()
     body = "IBAN IT71X0306901600000000012345\nData;Descrizione;Importo\n02/11/2026;Versamento contanti;200,00\n"
     doc = owner.post(
-        "/api/documents", files={"file": ("intesa.csv", body.encode())}, data={"kind": "statement", "account_id": str(acc["id"])}
+        "/api/documents",
+        files={"file": ("intesa.csv", body.encode())},
+        data={"kind": "statement", "account_id": str(acc["id"])},
     ).json()
     assert doc["imported"] == 1 and doc["account_id"] == acc["id"]
     learnt = next(a for a in owner.get("/api/accounts").json() if a["id"] == acc["id"])
-    assert learnt["iban"] == "IT71X0306901600000000012345"  # next month the statement finds it alone
+    assert (
+        learnt["iban"] == "IT71X0306901600000000012345"
+    )  # next month the statement finds it alone

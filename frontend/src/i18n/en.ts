@@ -558,6 +558,7 @@ export const en = {
   "wizard.done": "Done",
   "wizard.cash": "Cash",
   "wizard.balanceFromStatement": "Leave it empty if you upload the statement: Oink takes the closing balance from it.",
+  "accounts.linkedEmpty": "The bank showed no account. With a free Enable Banking app, first enable your accounts in its control panel (Link accounts), then link the bank here again.",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

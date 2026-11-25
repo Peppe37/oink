@@ -556,4 +556,5 @@ export const fr: Dict = {
   "wizard.done": "Terminé",
   "wizard.cash": "Espèces",
   "wizard.balanceFromStatement": "Laissez vide si vous importez le relevé : Oink y prend le solde final.",
+  "accounts.linkedEmpty": "La banque n'a montré aucun compte. Avec une appli Enable Banking gratuite, activez d'abord vos comptes dans leur panneau (Link accounts), puis reliez la banque ici.",
 };

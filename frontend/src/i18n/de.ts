@@ -556,4 +556,5 @@ export const de: Dict = {
   "wizard.done": "Fertig",
   "wizard.cash": "Bargeld",
   "wizard.balanceFromStatement": "Leer lassen, wenn du den Auszug hochlädst: Oink nimmt den Endsaldo daraus.",
+  "accounts.linkedEmpty": "Die Bank hat kein Konto gezeigt. Mit einer kostenlosen Enable-Banking-App aktiviere deine Konten zuerst in deren Kontrollzentrum (Link accounts) und verbinde die Bank dann hier erneut.",
 };

@@ -233,4 +233,7 @@ def test_a_revoked_token_disappears_from_the_list(owner: TestClient) -> None:
     assert owner.delete(f"/api/tokens/{gone['id']}").status_code == 200
     names = [t["name"] for t in owner.get("/api/tokens").json()]
     assert names == ["Jarvis"] and keep["token"].startswith("oink_")
-    assert owner.get("/api/accounts", headers={"Authorization": f"Bearer {gone['token']}"}).status_code == 401
+    assert (
+        owner.get("/api/accounts", headers={"Authorization": f"Bearer {gone['token']}"}).status_code
+        == 401
+    )

@@ -67,6 +67,17 @@ def _upsert_accounts(
                 Account.external_id == remote.uid,
             )
         )
+        if acc is None:  # linked again (a new consent): the same account, not a copy
+            acc = db.scalar(
+                select(Account).where(
+                    Account.user_id == user.id,
+                    Account.source == "linked",
+                    (Account.external_id == remote.uid)
+                    | ((Account.iban == remote.iban) & (Account.iban != "")),
+                )
+            )
+            if acc is not None:
+                acc.connection_id, acc.external_id, acc.archived = conn.id, remote.uid, False
         if acc is None:
             acc = Account(
                 user_id=user.id,
@@ -131,7 +142,40 @@ async def finish_bank(
         conn.valid_until = datetime.fromisoformat(session["valid_until"].replace("Z", "+00:00"))
     user = db.get(User, conn.user_id)
     assert user is not None
-    return _upsert_accounts(db, user, conn, session["accounts"], conn.label)
+    accounts = _upsert_accounts(db, user, conn, session["accounts"], conn.label)
+    # right after the login the bank gives the whole history: take it now
+    for acc in accounts:
+        try:
+            moves = await bank.history(acc.external_id, acc.currency)
+        except ProviderError as exc:
+            log.warning("history of account %s not available: %s", acc.id, exc)
+            continue
+        add_movements(db, acc, moves, "linked")
+    # older consents of the same bank whose accounts moved to this one are done
+    for old in db.scalars(
+        select(Connection).where(
+            Connection.user_id == user.id,
+            Connection.provider == "enablebanking",
+            Connection.id != conn.id,
+            Connection.label == conn.label,
+        )
+    ):
+        if not db.scalar(select(Account.id).where(Account.connection_id == old.id).limit(1)):
+            db.delete(old)
+    db.commit()
+    return accounts
+
+
+def forget_pending(db: Session, user_id: int) -> None:
+    """Bank logins started and never finished (closed tab, error at the bank)."""
+    cutoff = datetime.now(UTC) - timedelta(minutes=30)
+    for conn in db.scalars(
+        select(Connection).where(Connection.user_id == user_id, Connection.status == "pending")
+    ):
+        created = aware(conn.created)
+        if created is None or created < cutoff:
+            db.delete(conn)
+    db.commit()
 
 
 # -- sync ----------------------------------------------------------------------------------

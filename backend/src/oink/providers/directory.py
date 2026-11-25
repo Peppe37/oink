@@ -16,7 +16,7 @@ DIRECTORY: list[dict[str, str]] = [
     {"name": "Fineco", "country": "IT", "method": "psd2", "search": "Fineco"},
     {"name": "N26", "country": "IT", "method": "psd2", "search": "N26"},
     {"name": "Hype", "country": "IT", "method": "psd2", "search": "Hype"},
-    {"name": "Trade Republic", "country": "DE", "method": "psd2_or_statement", "search": "Trade Republic",
+    {"name": "Trade Republic", "country": "IT", "method": "psd2_or_statement", "search": "Trade Republic",
      "export": "App → Profile → Documents → account statement (PDF), or Settings → Export transactions (CSV)"},
     {"name": "Deblock", "country": "FR", "method": "psd2_or_statement", "search": "Deblock",
      "export": "App → Account → Statements (PDF)"},

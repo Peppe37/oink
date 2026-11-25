@@ -37,7 +37,7 @@ export function Accounts({ notify, adding, setAdding, baseCurrency }: { notify: 
   useEffect(() => {
     const linked = params.get("linked");
     if (!linked) return;
-    notify(t(linked === "ok" ? "accounts.linkedOk" : "accounts.linkedError"));
+    notify(t(linked === "ok" ? "accounts.linkedOk" : linked === "empty" ? "accounts.linkedEmpty" : "accounts.linkedError"));
     setParams({}, { replace: true });
   }, [params, setParams, notify, t]);
 
