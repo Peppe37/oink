@@ -571,4 +571,5 @@ export const fr: Dict = {
   "invest.payFromHint": "Ses débits deviennent les achats du plan : pas des dépenses, et les parts sont comptées.",
   "invest.dayOfMonth": "Jour du mois",
   "invest.end": "Fin",
+  "movements.pending": "En attente",
 };

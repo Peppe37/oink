@@ -571,4 +571,5 @@ export const de: Dict = {
   "invest.payFromHint": "Die Abbuchungen dort werden zu Käufen des Plans: keine Ausgaben, Anteile werden gezählt.",
   "invest.dayOfMonth": "Tag im Monat",
   "invest.end": "Ende",
+  "movements.pending": "Vorgemerkt",
 };

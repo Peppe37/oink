@@ -156,6 +156,14 @@ class EnableBanking:
 
     async def history(self, uid: str, currency: str) -> list[NewMovement]:
         """As much past as the bank gives: right after the login most give years."""
+        # Let the aggregator find the earliest available date instead of falling
+        # back to a short window when the bank rejects a requested period.
+        try:
+            return await self.movements(
+                uid, currency, date.today() - timedelta(days=HISTORY_DAYS[0]), strategy="longest"
+            )
+        except ProviderError:
+            pass  # keep the explicit-window fallback for banks rejecting this strategy
         last: ProviderError | None = None
         for days in HISTORY_DAYS:
             try:
@@ -164,14 +172,27 @@ class EnableBanking:
                 last = exc
         raise last or ProviderError("history_unavailable")
 
-    async def movements(self, uid: str, currency: str, since: date) -> list[NewMovement]:
+    async def movements(
+        self,
+        uid: str,
+        currency: str,
+        since: date,
+        *,
+        strategy: str = "default",
+        pending: bool = False,
+    ) -> list[NewMovement]:
+        """Booked movements; with `pending`, only the ones still waiting to be booked (a card
+        payment of today: already in the balance, not yet in the booked list)."""
         found: list[NewMovement] = []
         params: dict[str, str] = {"date_from": since.isoformat()}
+        if strategy != "default":
+            params["strategy"] = strategy
         for _ in range(50):  # pages
             data = await self._call("GET", f"/accounts/{uid}/transactions", params=params)
             for tx in data.get("transactions", []):
-                if tx.get("status") not in (None, "BOOK"):
-                    continue  # pending ones change: wait until booked
+                booked = tx.get("status") in (None, "BOOK")
+                if booked == pending:
+                    continue
                 movement = to_movement(tx, currency)
                 if movement is not None:
                     found.append(movement)

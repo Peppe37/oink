@@ -107,7 +107,7 @@ export function Activity({ ai, notify }: { ai: boolean; notify: (s: string) => v
                     <span className="item-main">
                       <span className="row-text">
                         <span className="row-title ellipsis">{tx.counterparty || tx.description}</span>
-                        <span className="row-detail ellipsis">{categoryLabel(t, tx.category)}{accounts.length > 1 ? ` · ${accountName(tx.account_id)}` : ""}</span>
+                        <span className="row-detail ellipsis">{tx.source === "pending" ? `${t("movements.pending")} · ` : ""}{categoryLabel(t, tx.category)}{accounts.length > 1 ? ` · ${accountName(tx.account_id)}` : ""}</span>
                       </span>
                       <span className={`num amount ${Number(tx.amount) > 0 ? "up" : ""}`}>{fmt.money(tx.amount, tx.currency, { sign: Number(tx.amount) > 0 })}</span>
                     </span>

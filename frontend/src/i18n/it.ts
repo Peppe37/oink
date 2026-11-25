@@ -571,4 +571,5 @@ export const it: Dict = {
   "invest.payFromHint": "I suoi addebiti lì diventano gli acquisti del piano: non sono spese, e le quote vengono contate.",
   "invest.dayOfMonth": "Giorno del mese",
   "invest.end": "Fine",
+  "movements.pending": "In attesa",
 };

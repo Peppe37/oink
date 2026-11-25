@@ -573,6 +573,7 @@ export const en = {
   "invest.payFromHint": "Its debits there become the plan's purchases: not spending, and units counted.",
   "invest.dayOfMonth": "Day of the month",
   "invest.end": "End",
+  "movements.pending": "Pending",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

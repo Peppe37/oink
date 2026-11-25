@@ -571,4 +571,5 @@ export const es: Dict = {
   "invest.payFromHint": "Sus cargos allí se convierten en compras del plan: no son gastos y se cuentan las participaciones.",
   "invest.dayOfMonth": "Día del mes",
   "invest.end": "Fin",
+  "movements.pending": "Pendiente",
 };

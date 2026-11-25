@@ -151,6 +151,7 @@ async def finish_bank(
             log.warning("history of account %s not available: %s", acc.id, exc)
             continue
         add_movements(db, acc, moves, "linked")
+        await refresh_pending(db, bank, acc)
     # older consents of the same bank whose accounts moved to this one are done
     for old in db.scalars(
         select(Connection).where(
@@ -164,6 +165,27 @@ async def finish_bank(
             db.delete(old)
     db.commit()
     return accounts
+
+
+async def refresh_pending(db: Session, bank: EnableBanking, acc: Account) -> None:
+    """Payments still waiting to be booked are shown at once, marked as such (source
+    «pending»); each sync replaces them, and once booked the bank's own copy takes over
+    (same amount within a day: the pending one is not added again)."""
+    try:
+        waiting = await bank.movements(
+            acc.external_id, acc.currency, date.today() - timedelta(days=14), pending=True
+        )
+    except ProviderError as exc:
+        log.info("pending movements of account %s not available: %s", acc.id, exc)
+        return
+    for old in db.scalars(
+        select(Transaction).where(Transaction.account_id == acc.id, Transaction.source == "pending")
+    ):
+        db.delete(old)
+    db.commit()
+    for i, m in enumerate(waiting):  # own fingerprints: the booked copy must not look «seen»
+        m.external_id = f"pending:{i}:{m.external_id}:{m.day.isoformat()}:{m.amount}"
+    add_movements(db, acc, waiting, "pending")
 
 
 def forget_pending(db: Session, user_id: int) -> None:
@@ -208,6 +230,7 @@ async def sync(db: Session, vault: Vault, conn: Connection, bank: EnableBanking 
             for acc in db.scalars(select(Account).where(Account.connection_id == conn.id)):
                 moves = await bank.movements(acc.external_id, acc.currency, _since(db, acc))
                 added += len(add_movements(db, acc, moves, "linked").added)
+                await refresh_pending(db, bank, acc)
                 if (balance := await bank.balance(acc.external_id, acc.currency)) is not None:
                     acc.balance, acc.balance_at = balance, datetime.now(UTC)
         else:

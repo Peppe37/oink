@@ -89,6 +89,40 @@ async def test_consent_never_longer_than_the_bank_allows(eb: tuple[EnableBanking
     assert valid - datetime.now(valid.tzinfo) > timedelta(days=150)
 
 
+async def test_history_uses_longest_and_follows_an_empty_continuation_page() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.params.get("strategy") != "longest":
+            return httpx.Response(400, json={"message": "WRONG_TRANSACTIONS_PERIOD"})
+        if "continuation_key" not in request.url.params:
+            return httpx.Response(200, json={"transactions": [], "continuation_key": "older"})
+        assert request.url.params["continuation_key"] == "older"
+        return httpx.Response(200, json={"transactions": [
+            {"transaction_amount": {"amount": "12.00"}, "credit_debit_indicator": "DBIT",
+             "booking_date": "2026-01-10", "status": "BOOK", "entry_reference": "old"},
+        ]})  # fmt: skip
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        bank = EnableBanking("app-id", KEY, client=client)
+        movements = await bank.history("u1", "EUR")
+    assert len(requests) == 2
+    assert len(movements) == 1
+    assert movements[0].day == date(2026, 1, 10)
+
+
+async def test_recent_sync_keeps_the_default_fetch_strategy() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["date_from"] == "2026-11-24"
+        assert "strategy" not in request.url.params
+        return httpx.Response(200, json={"transactions": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        bank = EnableBanking("app-id", KEY, client=client)
+        assert await bank.movements("u1", "EUR", date(2026, 11, 24)) == []
+
+
 async def test_linking_takes_the_whole_history_and_relinking_keeps_the_account(
     eb: tuple[EnableBanking, FakeEB], tmp_path: Path
 ) -> None:
@@ -142,3 +176,36 @@ def test_a_statement_over_a_linked_account_adds_only_what_the_bank_did_not(tmp_p
             NewMovement(date(2026, 9, 3), -1200, "Bar Centrale"),      # a second coffee that day: new
         ], "import")  # fmt: skip
         assert len(result.added) == 2 and result.duplicates == 1
+
+
+async def test_a_payment_waiting_to_be_booked_shows_at_once_and_is_replaced(tmp_path: Path) -> None:
+    from oink.services.connections import refresh_pending
+    from oink.services.ledger import add_movements
+
+    state = {"booked": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tx = {"transaction_amount": {"amount": "362.00"}, "credit_debit_indicator": "DBIT",
+              "booking_date": "2026-11-25", "remittance_information": ["Hotel"],
+              "status": "BOOK" if state["booked"] else "PDNG", "entry_reference": "p1"}  # fmt: skip
+        return httpx.Response(200, json={"transactions": [tx]})
+
+    db = Database(f"sqlite:///{tmp_path / 'oink.db'}")
+    db.create()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        bank = EnableBanking("app-id", KEY, client=client)
+        with db.sessions() as s:
+            user = create_user(s, "giu", "giu-password-12")
+            acc = Account(user_id=user.id, name="Revolut", source="linked", external_id="u1")
+            s.add(acc)
+            s.commit()
+            await refresh_pending(s, bank, acc)
+            assert [(t.amount, t.source) for t in s.scalars(select(Transaction))] == [
+                (-36200, "pending")
+            ]
+            state["booked"] = True  # the next sync: the bank has booked it
+            add_movements(s, acc, await bank.movements("u1", "EUR", date(2026, 11, 20)), "linked")
+            await refresh_pending(s, bank, acc)
+            assert [(t.amount, t.source) for t in s.scalars(select(Transaction))] == [
+                (-36200, "linked")
+            ]

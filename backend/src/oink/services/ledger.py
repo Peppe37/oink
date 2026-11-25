@@ -101,6 +101,7 @@ def add_movements(
             select(Transaction.day, Transaction.amount).where(
                 Transaction.account_id == account.id,
                 Transaction.source != source,
+                Transaction.source != "pending",  # provisional: the booked copy replaces it
                 Transaction.day >= start,
                 Transaction.day <= end,
             )
