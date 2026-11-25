@@ -1,6 +1,6 @@
 [project]
 name = "oink"
-version = "0.3.0"
+version = "0.3.1"
 description = "Self-hosted personal finance with AI reports and a real glass UI."
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"

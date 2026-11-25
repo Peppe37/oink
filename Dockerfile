@@ -1,5 +1,6 @@
 # Oink: one image, the web app built in and served by the API.
-FROM node:22-alpine AS web
+# The web app is the same for every architecture: build it once, natively.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
