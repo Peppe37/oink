@@ -6,6 +6,7 @@ import { api, type Status } from "./api";
 import { I18nProvider, resolveLanguage, type Lang } from "./i18n";
 import { Accounts } from "./pages/Accounts";
 import { Activity } from "./pages/Activity";
+import { Documents } from "./pages/Documents";
 import { Home } from "./pages/Home";
 import { Insights } from "./pages/Insights";
 import { Invest } from "./pages/Invest";
@@ -64,6 +65,7 @@ function App({ status, onStatus, onLanguage }: { status: Status; onStatus: () =>
               <Route path="/activity" element={<Activity ai={status.ai_reads_text} notify={notify} />} />
               <Route path="/accounts" element={<Accounts notify={notify} adding={adding} setAdding={setAdding} baseCurrency={user.base_currency} />} />
               <Route path="/invest" element={<Invest notify={notify} currency={user.base_currency} />} />
+              <Route path="/documents" element={<Documents ai={status.ai_reads_text} notify={notify} />} />
               <Route path="/insights" element={<Insights ai={status.ai} notify={notify} />} />
               <Route path="/settings" element={<Settings user={user} notify={notify} onLogout={onStatus} onUpdate={() => setShowUpdate(true)}
                 onUser={(u) => { onLanguage(resolveLanguage(u.language)); onStatus(); }} />} />

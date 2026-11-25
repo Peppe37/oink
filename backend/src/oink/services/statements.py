@@ -98,20 +98,42 @@ def _move(file: Path, folder: Path, reason: str = "") -> None:
         target.with_suffix(target.suffix + ".why.txt").write_text(reason + "\n")
 
 
-async def scan_inbox(db: Session, inbox: Path, ai: AI) -> int:
-    """Import every waiting file; returns how many were imported."""
+async def scan_inbox(db: Session, inbox: Path, ai: AI, documents: Path | None = None) -> int:
+    """Import every waiting file; returns how many were imported. With `documents` every
+    file is also filed in the documents hub (payslips and contracts too, not only
+    statements), so the inbox is a drop folder for any financial paper."""
+    from oink.services import documents as docs  # documents builds on this module
+
     imported = 0
+    types = docs.ACCEPTED if documents is not None else INBOX_TYPES
     for user in db.scalars(select(User).where(User.disabled.is_(False))):
         home = inbox / user.username
         if not home.is_dir():
             home.mkdir(parents=True, exist_ok=True)
             continue
-        waiting = [p for p in home.iterdir() if p.is_file() and p.suffix.lower() in INBOX_TYPES]
+        waiting = [p for p in home.iterdir() if p.is_file() and p.suffix.lower() in types]
         for sub in home.iterdir():
             if sub.is_dir() and sub.name.isdigit():
-                waiting += [p for p in sub.iterdir() if p.suffix.lower() in INBOX_TYPES]
+                waiting += [p for p in sub.iterdir() if p.suffix.lower() in types]
         for file in waiting:
             hint = int(file.parent.name) if file.parent != home else None
+            if documents is not None:
+                try:
+                    stored = await docs.store(
+                        db, user, documents, file.name, file.read_bytes(), ai,
+                        account_id=hint, source="inbox",
+                    )  # fmt: skip
+                except (docs.DocumentError, ImportError_) as exc:
+                    _move(file, home / "unmatched", getattr(exc, "code", str(exc)))
+                    continue
+                doc = stored.document
+                if doc.kind == "statement" and stored.outcome is None and not stored.duplicate:
+                    _move(file, home / "unmatched", doc.import_note or "nothing_found")
+                    continue
+                month = doc.doc_date.strftime("%Y-%m") if doc.doc_date else "undated"
+                _move(file, home / "done" / month)
+                imported += 1
+                continue
             try:
                 if file.stat().st_size > MAX_FILE:
                     raise ImportError_("file_too_big")

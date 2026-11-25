@@ -77,6 +77,7 @@ const TABS: { to: string; label: Key; icon: string; colors: [string, string] }[]
   { to: "/activity", label: "nav.movements", icon: "activity", colors: ["#8fd3ff", "#2f7fe8"] },
   { to: "/accounts", label: "nav.accounts", icon: "wallet", colors: ["#b9a6ff", "#6a4fe6"] },
   { to: "/invest", label: "nav.invest", icon: "investments", colors: ["#7ff0c9", "#0f9e7c"] },
+  { to: "/documents", label: "nav.documents", icon: "documents", colors: ["#9fe6ff", "#2aa7c9"] },
   { to: "/insights", label: "nav.reports", icon: "insights", colors: ["#ffd27a", "#f08a1c"] },
   { to: "/settings", label: "nav.settings", icon: "settings", colors: ["#c9c6d6", "#6f6a85"] },
 ];
@@ -90,8 +91,8 @@ export function Navigation() {
   const wide = useWide(700);
   const pointer = useMotionValue(Infinity);
   const [bounce, setBounce] = useState<string | null>(null);
-  const base = wide ? 50 : 44;
-  const peak = wide ? 78 : 60;
+  const base = wide ? 50 : 40;
+  const peak = wide ? 78 : 56;
   const active = (to: string) => (to === "/" ? pathname === "/" : pathname.startsWith(to));
   const open = (to: string) => {
     setBounce(to);

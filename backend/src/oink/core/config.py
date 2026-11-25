@@ -74,6 +74,10 @@ class Settings(BaseSettings):
         return bool(self.ai_model)
 
     @property
+    def documents_dir(self) -> Path:
+        return self.data_dir / "documents"
+
+    @property
     def inbox_dir(self) -> Path:
         return self.data_dir / "inbox"
 

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from oink.api.admin import ai_store
 from oink.api.admin import router as admin_router
+from oink.api.documents import router as documents_router
 from oink.api.mcp import router as mcp_router
 from oink.api.planning import router as planning_router
 from oink.api.routes import api
@@ -80,6 +81,7 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     app.include_router(planning_router)
     app.include_router(admin_router)
     app.include_router(mcp_router)
+    app.include_router(documents_router)
 
     @app.middleware("http")
     async def headers(request: Request, call_next):  # type: ignore[no-untyped-def]

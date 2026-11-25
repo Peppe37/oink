@@ -156,7 +156,7 @@ async def loop(sessions: sessionmaker[Session], settings: Settings, ai: AI, vaul
     while True:
         try:
             with sessions() as db:
-                await scan_inbox(db, settings.inbox_dir, ai)
+                await scan_inbox(db, settings.inbox_dir, ai, settings.documents_dir)
             if clock() - last_sync > settings.sync_hours * 3600:
                 await sync_all(sessions, settings, vault)
                 last_sync = clock()

@@ -1,0 +1,280 @@
+/* The financial documents hub: drop statements, payslips, contracts, invoices; Oink reads
+   and files them (statements also fill their account), finds anything in them, and answers
+   questions citing the documents. */
+
+import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import { api, type Account, type Doc, type DocKind, type DocSource } from "../api";
+import { Glass } from "../glass/Glass";
+import { useErrorText, useI18n, type Key } from "../i18n";
+import { Empty, Field, PageHeader, Row, Sheet, Spinner, rise, stagger } from "../ui/bits";
+import { Icon, Tile } from "../ui/icons";
+
+const KINDS: DocKind[] = ["statement", "payslip", "contract", "invoice", "receipt", "tax", "insurance", "investment", "other"];
+const LOOK: Record<DocKind, { icon: string; colors: [string, string] }> = {
+  statement: { icon: "bank", colors: ["#ff8cc0", "#c94b8c"] },
+  payslip: { icon: "salary", colors: ["#5ef0aa", "#16b06a"] },
+  contract: { icon: "contract", colors: ["#9b8cff", "#5a45d6"] },
+  invoice: { icon: "fees", colors: ["#ffd76a", "#f2a71b"] },
+  receipt: { icon: "receipt", colors: ["#ffb26b", "#f0703c"] },
+  tax: { icon: "taxes", colors: ["#c4c4d4", "#7f7f97"] },
+  insurance: { icon: "shield", colors: ["#6cc9ff", "#2f86e8"] },
+  investment: { icon: "investment", colors: ["#6ee7d0", "#13897e"] },
+  other: { icon: "file", colors: ["#b3aec2", "#7c7690"] },
+};
+const kindKey = (k: DocKind) => `docs.kind.${k}` as Key;
+type Message = { role: "user" | "assistant"; content: string; sources?: DocSource[]; note?: string };
+
+export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [docs, setDocs] = useState<Doc[] | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [kind, setKind] = useState<DocKind | "">("");
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState<Doc | null>(null);
+  const [busy, setBusy] = useState("");
+  const [over, setOver] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(() => {
+    api.documents({ kind: kind || undefined, q: q.trim() || undefined }).then(setDocs).catch((e) => notify(errorText(e)));
+  }, [kind, q, notify, errorText]);
+  useEffect(() => { const timer = setTimeout(load, q ? 250 : 0); return () => clearTimeout(timer); }, [load, q]);
+  useEffect(() => { api.accounts().then(setAccounts).catch(() => undefined); }, []);
+  const accountName = (id: number | null) => accounts.find((a) => a.id === id)?.name ?? "";
+
+  const upload = async (files: FileList | File[]) => {
+    for (const file of Array.from(files)) {
+      setBusy(file.name);
+      try {
+        const r = await api.uploadDocument(file);
+        if (r.duplicate) notify(t("docs.duplicate", { title: r.title }));
+        else if (r.import?.added) notify(t("docs.imported", { title: r.title, count: r.import.added }));
+        else notify(t("docs.uploaded", { title: r.title }));
+      } catch (e) {
+        notify(`${file.name}: ${errorText(e)}`);
+      }
+    }
+    setBusy("");
+    load();
+  };
+  const onDrop = (e: DragEvent) => { e.preventDefault(); setOver(false); if (e.dataTransfer.files.length) upload(e.dataTransfer.files); };
+
+  const byYear = useMemo(() => {
+    const groups = new Map<string, Doc[]>();
+    for (const d of docs ?? []) {
+      const year = (d.date ?? d.created ?? "").slice(0, 4) || "—";
+      groups.set(year, [...(groups.get(year) ?? []), d]);
+    }
+    return [...groups.entries()];
+  }, [docs]);
+
+  return (
+    <motion.div className="page" variants={stagger} initial="hidden" animate="show"
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}>
+      <PageHeader title={t("docs.title")} subtitle={t("docs.subtitle")} action={
+        <button className="btn" onClick={() => input.current?.click()} disabled={!!busy}>
+          {busy ? <><Spinner /> <span className="hide-xs">{t("docs.uploading", { name: busy })}</span></> : <><Icon name="upload" size={18} /> {t("docs.upload")}</>}
+        </button>} />
+      <input ref={input} type="file" multiple hidden accept=".pdf,.csv,.tsv,.txt,.ofx,.qfx,.md,.json,.xml,.png,.jpg,.jpeg,.webp,image/*"
+        onChange={(e) => { if (e.target.files?.length) upload(e.target.files); e.target.value = ""; }} />
+
+      <motion.div variants={rise}><DocChat ai={ai} onOpen={(id) => api.document(id).then(setOpen).catch((e) => notify(errorText(e)))} /></motion.div>
+
+      <motion.div variants={rise} className="stack">
+        <Glass variant="pill" className="search">
+          <Icon name="search" size={18} className="faint" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("docs.search")} aria-label={t("docs.search")} />
+        </Glass>
+        <div className="chips scroll-x">
+          <button className={`chip ${kind === "" ? "on" : ""}`} onClick={() => setKind("")}>{t("docs.all")}</button>
+          {KINDS.map((k) => <button key={k} className={`chip ${kind === k ? "on" : ""}`} onClick={() => setKind(k)}>{t(kindKey(k))}</button>)}
+        </div>
+      </motion.div>
+
+      <motion.div variants={rise}>
+        <div className={`drop ${over ? "over" : ""}`} onClick={() => input.current?.click()} role="button" tabIndex={0}>
+          <Icon name="upload" size={22} />
+          <strong>{t("docs.drop")}</strong>
+          <span className="small-text">{t("docs.inbox")}</span>
+        </div>
+      </motion.div>
+
+      {docs === null ? <div className="skeleton" style={{ height: 180 }} />
+        : docs.length === 0 ? (
+          <motion.div variants={rise}><Glass className="card"><Empty icon="documents" title={t("docs.empty")} hint={q || kind ? undefined : t("docs.emptyHint")} /></Glass></motion.div>
+        ) : byYear.map(([year, items]) => (
+          <motion.section variants={rise} key={year}>
+            <h4 className="day-head">{year}</h4>
+            <Glass className="card list tight-card">
+              {items.map((d) => (
+                <Row key={d.id} onClick={() => api.document(d.id).then(setOpen).catch((e) => notify(errorText(e)))} chevron
+                  icon={<Tile icon={LOOK[d.kind].icon} from={LOOK[d.kind].colors[0]} to={LOOK[d.kind].colors[1]} size={38} />}
+                  title={d.title}
+                  detail={[t(kindKey(d.kind)), d.issuer, d.date && fmt.date(d.date, { day: "numeric", month: "short", year: "numeric" }),
+                    d.imported != null && d.account_id ? t("docs.importedInto", { count: d.imported, account: accountName(d.account_id) }) : "",
+                    d.kind === "statement" && d.imported == null ? t("docs.notImported") : ""].filter(Boolean).join(" · ")} />
+              ))}
+            </Glass>
+          </motion.section>
+        ))}
+
+      <DocSheet doc={open} accounts={accounts} onClose={() => setOpen(null)} notify={notify}
+        onChanged={(d) => { setOpen(d); load(); }} onDeleted={() => { setOpen(null); load(); notify(t("docs.deleted")); }} />
+    </motion.div>
+  );
+}
+
+function DocChat({ ai, onOpen }: { ai: boolean; onOpen: (id: number) => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => { end.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [messages, asking]);
+
+  const ask = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = question.trim();
+    if (!text || asking) return;
+    const history = messages.map(({ role, content }) => ({ role, content }));
+    setMessages((m) => [...m, { role: "user", content: text }]);
+    setQuestion("");
+    setAsking(true);
+    try {
+      const r = await api.askDocuments(text, history);
+      const content = r.answer ?? (r.sources.length ? "" : t("docs.chatNothing"));
+      setMessages((m) => [...m, { role: "assistant", content, sources: r.sources, note: !r.ai && r.sources.length ? t("docs.chatNoAI") : undefined }]);
+    } catch (err) {
+      setMessages((m) => [...m, { role: "assistant", content: errorText(err) }]);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <Glass refract strength={26} className="card doc-chat">
+      <div className="row between">
+        <h3 className="row" style={{ gap: 8, margin: 0 }}><Icon name="chat" size={18} /> {t("docs.chatTitle")}</h3>
+        {messages.length > 0 && <button className="btn ghost small" onClick={() => setMessages([])}>{t("docs.clear")}</button>}
+      </div>
+      {messages.length > 0 && (
+        <div className="chat-log">
+          <AnimatePresence initial={false}>
+            {messages.map((m, i) => (
+              <motion.div key={i} className={`bubble ${m.role}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+                {m.note && <p className="muted small-text">{m.note}</p>}
+                {m.content && (m.role === "assistant" ? <div className="md"><ReactMarkdown>{m.content}</ReactMarkdown></div> : <p>{m.content}</p>)}
+                {m.sources && m.sources.length > 0 && (
+                  <div className="sources">
+                    <span className="faint small-text">{t("docs.sources")}</span>
+                    {m.sources.slice(0, m.content ? 5 : 8).map((s) => (
+                      <button key={s.n} className="source" onClick={() => onOpen(s.document_id)} title={s.snippet}>
+                        <span className="source-n">{s.n}</span>
+                        <span className="ellipsis">{s.title}</span>
+                        {!m.content && <span className="source-snip">{s.snippet}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {asking && <div className="bubble assistant muted"><Spinner /> {t("docs.thinking")}</div>}
+          <div ref={end} />
+        </div>
+      )}
+      <form className="chat-input" onSubmit={ask}>
+        <input className="field" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t("docs.chatPlaceholder")} aria-label={t("docs.chatTitle")} />
+        <button className="icon-btn send" disabled={asking || !question.trim()} aria-label={t("docs.chatTitle")}><Icon name="send" size={19} /></button>
+      </form>
+      <p className="faint small-text" style={{ margin: "8px 2px 0" }}>{ai ? t("docs.chatHint") : t("docs.chatNoAI")}</p>
+    </Glass>
+  );
+}
+
+function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
+  doc: Doc | null; accounts: Account[]; onClose: () => void; onChanged: (d: Doc) => void; onDeleted: () => void; notify: (s: string) => void;
+}) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [target, setTarget] = useState<number | "">("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setTarget(doc?.account_id ?? ""); }, [doc]);
+  if (!doc) return <Sheet open={false} onClose={onClose}><span /></Sheet>;
+  const look = LOOK[doc.kind];
+  const canImport = /\.(pdf|csv|tsv|txt|ofx|qfx)$/i.test(doc.filename);
+
+  const patch = async (body: Parameters<typeof api.patchDocument>[1]) => {
+    try { onChanged(await api.patchDocument(doc.id, body)); notify(t("docs.saved")); } catch (e) { notify(errorText(e)); }
+  };
+  const importNow = async () => {
+    setBusy(true);
+    try {
+      const r = await api.importDocument(doc.id, target || undefined);
+      notify(t("docs.imported", { title: r.title, count: r.import?.added ?? 0 }));
+      onChanged(await api.document(doc.id));
+    } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!confirm(t("docs.deleteConfirm"))) return;
+    try { await api.deleteDocument(doc.id); onDeleted(); } catch (e) { notify(errorText(e)); }
+  };
+
+  return (
+    <Sheet open onClose={onClose} title={doc.title} wide>
+      <div className="stack">
+        <div className="row" style={{ gap: 14 }}>
+          <Tile icon={look.icon} from={look.colors[0]} to={look.colors[1]} size={48} />
+          <div className="row-text">
+            <span className="row-title">{t(kindKey(doc.kind))}{doc.issuer ? ` · ${doc.issuer}` : ""}</span>
+            <span className="row-detail">{[doc.date && fmt.date(doc.date, { day: "numeric", month: "long", year: "numeric" }), doc.filename].filter(Boolean).join(" · ")}</span>
+          </div>
+        </div>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <a className="btn ghost small" href={api.documentUrl(doc.id)} target="_blank" rel="noreferrer"><Icon name="open" size={16} /> {t("docs.open")}</a>
+          <a className="btn ghost small" href={api.documentUrl(doc.id, true)}><Icon name="download" size={16} /> {t("docs.download")}</a>
+          <button className="btn ghost small danger" onClick={remove}><Icon name="trash" size={16} /> {t("docs.delete")}</button>
+        </div>
+        {!doc.has_text && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
+        {doc.summary && <div><h4 className="section-label">{t("docs.summary")}</h4><p style={{ margin: 0 }}>{doc.summary}</p></div>}
+        {Object.keys(doc.facts).length > 0 && (
+          <div>
+            <h4 className="section-label">{t("docs.facts")}</h4>
+            <div className="list">
+              {Object.entries(doc.facts).map(([k, v]) => (
+                <div key={k} className="item"><span className="item-main"><span className="row-text"><span className="row-detail">{k.replace(/_/g, " ")}</span></span><span className="num">{String(v)}</span></span></div>
+              ))}
+            </div>
+          </div>
+        )}
+        {canImport && (
+          <div>
+            <h4 className="section-label">{t("docs.account")}</h4>
+            {doc.imported != null && doc.account_id
+              ? <p className="muted" style={{ margin: "0 0 10px" }}>{t("docs.importedInto", { count: doc.imported, account: accounts.find((a) => a.id === doc.account_id)?.name ?? "" })}</p>
+              : doc.import_note && <p className="muted" style={{ margin: "0 0 10px" }}>{errorText(new Error(doc.import_note))}</p>}
+            <div className="row wrap" style={{ gap: 8 }}>
+              <select className="field" style={{ flex: 1, minWidth: 180 }} value={target} onChange={(e) => setTarget(e.target.value ? Number(e.target.value) : "")} aria-label={t("docs.importTo")}>
+                <option value="">{t("docs.pickAccount")}</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <button className="btn" onClick={importNow} disabled={busy}>{busy ? <Spinner /> : <Icon name="download" size={16} />} {t("docs.import")}</button>
+            </div>
+          </div>
+        )}
+        <div className="two">
+          <Field label={t("docs.titleLabel")}><input className="field" defaultValue={doc.title} onBlur={(e) => e.target.value.trim() && e.target.value !== doc.title && patch({ title: e.target.value.trim() })} /></Field>
+          <Field label={t("docs.kindLabel")}>
+            <select className="field" value={doc.kind} onChange={(e) => patch({ kind: e.target.value as DocKind })}>
+              {KINDS.map((k) => <option key={k} value={k}>{t(kindKey(k))}</option>)}
+            </select>
+          </Field>
+        </div>
+      </div>
+    </Sheet>
+  );
+}

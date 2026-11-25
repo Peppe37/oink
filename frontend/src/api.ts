@@ -60,6 +60,15 @@ export type Picture = {
   lifestyle: { months: number; income?: number; spending?: number; saving_rate?: number | null; essential_share?: number | null };
   risk: { score: number | null; profile: string | null; horizon_years: number | null; suggested_equity_share: number | null };
 };
+export type DocKind = "statement" | "payslip" | "contract" | "invoice" | "receipt" | "tax" | "insurance" | "investment" | "other";
+export type Doc = {
+  id: number; kind: DocKind; title: string; filename: string; mime: string; size: number; summary: string; issuer: string;
+  date: string | null; facts: Record<string, string | number>; account_id: number | null; imported: number | null;
+  import_note: string; source: string; created: string; has_text: boolean; text?: string;
+};
+export type DocUpload = Doc & { duplicate: boolean; import: ImportResult | null };
+export type DocSource = { n: number; document_id: number; title: string; date: string | null; snippet: string };
+export type DocAnswer = { answer: string | null; sources: DocSource[]; ai: boolean };
 export type AISettings = { source: "app" | "env" | "off"; model: string; base_url: string; has_key: boolean; send_descriptions: boolean; providers: Record<string, { example: string; key: boolean }> };
 
 export class ApiError extends Error {
@@ -119,6 +128,24 @@ export const api = {
   },
   requests: () => call<StatementRequest[]>("/requests"),
   skipRequest: (id: number) => call(`/requests/${id}/skip`, { method: "POST" }),
+
+  documents: (params: { kind?: string; q?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
+  document: (id: number) => call<Doc>(`/documents/${id}`),
+  uploadDocument: (file: File, opts: { kind?: string; accountId?: number } = {}) => {
+    const form = new FormData();
+    if (opts.kind) form.append("kind", opts.kind);
+    if (opts.accountId) form.append("account_id", String(opts.accountId));
+    form.append("file", file);
+    return call<DocUpload>("/documents", { method: "POST", body: form });
+  },
+  patchDocument: (id: number, body: Partial<{ title: string; kind: DocKind; date: string | null; account_id: number | null; issuer: string }>) =>
+    call<Doc>(`/documents/${id}`, { method: "PATCH", body: json(body) }),
+  importDocument: (id: number, accountId?: number) =>
+    call<DocUpload>(`/documents/${id}/import`, { method: "POST", body: json({ account_id: accountId ?? null }) }),
+  deleteDocument: (id: number) => fetch(`/api/documents/${id}`, { method: "DELETE", credentials: "same-origin" }).then((r) => { if (!r.ok) throw new ApiError(r.status, "generic"); }),
+  askDocuments: (question: string, history: { role: "user" | "assistant"; content: string }[]) =>
+    call<DocAnswer>("/documents/ask", { method: "POST", body: json({ question, history }) }),
+  documentUrl: (id: number, download = false) => `/api/documents/${id}/file${download ? "?download=true" : ""}`,
 
   reports: () => call<Report[]>("/reports"),
   generate: (language: string) => call<Report>(`/reports/generate?${query({ language })}`, { method: "POST" }),

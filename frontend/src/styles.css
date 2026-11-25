@@ -406,3 +406,21 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .secret.code { white-space: pre; overflow-x: auto; word-break: normal; margin: 0; }
 .advice .md { margin-top: 14px; }
 .note.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+
+/* -- documents ----------------------------------------------------------------------------- */
+.doc-chat { display: grid; gap: 12px; }
+.chat-log { display: grid; gap: 10px; max-height: min(52vh, 520px); overflow-y: auto; padding: 4px 2px; overscroll-behavior: contain; }
+.bubble { max-width: min(92%, 640px); padding: 10px 14px; border-radius: 18px; line-height: 1.45; display: grid; gap: 8px; }
+.bubble p { margin: 0; }
+.bubble.user { justify-self: end; background: linear-gradient(150deg, var(--pink), var(--pink-2)); color: #fff; border-bottom-right-radius: 6px; }
+.bubble.assistant { justify-self: start; background: color-mix(in srgb, var(--fg) 7%, transparent); border-bottom-left-radius: 6px; }
+.bubble .md > :first-child { margin-top: 0; } .bubble .md > :last-child { margin-bottom: 0; }
+.sources { display: grid; gap: 6px; }
+.source { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; row-gap: 2px; text-align: left; border: 0; cursor: pointer; padding: 7px 10px; border-radius: 12px; background: color-mix(in srgb, var(--fg) 6%, transparent); color: inherit; font: inherit; font-size: 13.5px; }
+.source:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.source-n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; font-size: 11.5px; font-weight: 700; background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.source-snip { grid-column: 2; color: var(--fg-2); font-size: 12.5px; line-height: 1.35; }
+.chat-input { display: flex; gap: 8px; align-items: center; }
+.chat-input .field { flex: 1; border-radius: 999px; }
+.icon-btn.send { background: linear-gradient(150deg, var(--pink), var(--pink-2)); color: #fff; flex: none; }
+.icon-btn.send:disabled { opacity: 0.45; }

@@ -224,6 +224,36 @@ class Report(Base):
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 
+class Document(Base):
+    """A financial document: statement, payslip, contract, invoice… The file lives in
+    `data/documents/<user id>/`, its text is split into chunks indexed for full-text search
+    (`doc_chunks`, an SQLite FTS5 table managed by `services.documents`)."""
+
+    __tablename__ = "documents"
+    __table_args__ = (UniqueConstraint("user_id", "sha256", name="uq_documents_user_sha"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="other")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    filename: Mapped[str] = mapped_column(String(255))
+    mime: Mapped[str] = mapped_column(String(100), default="application/octet-stream")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64))
+    stored: Mapped[str] = mapped_column(String(255))  # path inside data/documents
+    text: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    issuer: Mapped[str] = mapped_column(String(160), default="")
+    doc_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    facts: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    imported: Mapped[int | None] = mapped_column(Integer, nullable=True)  # movements added
+    import_note: Mapped[str] = mapped_column(String(60), default="")  # why it was not imported
+    source: Mapped[str] = mapped_column(String(16), default="upload")  # upload|inbox|api|mcp
+    created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
 class Rule(Base):
     """«Descriptions containing X are category Y»: learnt from the user's corrections."""
 

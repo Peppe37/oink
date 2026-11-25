@@ -50,6 +50,8 @@ SCOPES: tuple[str, ...] = (
     "ai:ask",
     "connections:read",
     "connections:write",
+    "documents:read",
+    "documents:write",
 )
 
 _hasher = PasswordHasher()

@@ -31,6 +31,14 @@ month. Any AI provider works, or none at all.
   the account by itself. CSVs of European banks are read directly, PDFs by the AI or, without
   AI, by a line parser. Duplicates are skipped. You can also drop files in an inbox folder
   (`data/inbox/<username>/`) and Oink imports them every few minutes.
+- **A documents hub**: statements, payslips, contracts, invoices, receipts, tax and insurance
+  papers in one place. Oink reads each file (PDF, CSV/OFX, text; photos and scans when the
+  AI model sees images), files it by type, date and issuer with its key numbers, and
+  imports the movements of statements into their account: uploading the monthly PDF keeps
+  an account up to date without a bank link. Everything is searchable (SQLite full-text
+  search, nothing leaves the server), and a chat answers questions like «net pay in
+  October?» or «notice period of the gym contract?» citing the documents; only the few
+  passages found are sent to the AI. Files in the inbox folder are filed too.
 - **A monthly reminder**: on the 1st, every account without a link asks for last month's
   statement, and the request closes itself when the statement arrives.
 - **Categories that learn**, each with its own icon: correct one once and Oink remembers it

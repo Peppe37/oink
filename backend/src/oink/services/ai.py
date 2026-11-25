@@ -71,7 +71,14 @@ class AI:
         cfg = self.config()
         return bool(cfg.model) and cfg.send_descriptions
 
-    async def complete(self, system: str, user: str, *, as_json: bool = False) -> str:
+    async def complete(
+        self,
+        system: str,
+        user: str | list[dict[str, Any]],
+        *,
+        as_json: bool = False,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
         cfg = self.config()
         if not cfg.model:
             raise AIError("ai_off")
@@ -87,7 +94,11 @@ class AI:
         try:
             response = await litellm.acompletion(
                 model=cfg.model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                messages=[
+                    {"role": "system", "content": system},
+                    *(history or []),
+                    {"role": "user", "content": user},
+                ],
                 timeout=120,
                 **kwargs,
             )
@@ -167,4 +178,45 @@ class AI:
             "using ONLY the data provided. If the data are not enough, say so. Short and "
             "concrete. No investment advice on single securities.",
             f"Data:\n{json.dumps(facts, ensure_ascii=False, default=str)}\n\nQuestion: {question}",
+        )
+
+    async def read_image(self, mime: str, b64: str) -> str:
+        """The text of a photo or scan (a receipt, a payslip), for models that see images."""
+        return await self.complete(
+            "Transcribe all the text of this document image faithfully, keeping numbers, "
+            "dates and the layout of tables as plain text lines. Reply with the text only.",
+            [{"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}],
+        )
+
+    async def describe_document(self, text: str, filename: str) -> dict[str, Any]:
+        """{"kind", "title", "date", "issuer", "summary", "facts"} for a financial document."""
+        data = await self.json(
+            "You file personal financial documents (any language). Reply ONLY with JSON "
+            '{"kind": one of statement|payslip|contract|invoice|receipt|tax|insurance|'
+            'investment|other, "title": short title in the document\'s language, "date": '
+            '"YYYY-MM-DD" (the date the document refers to) or null, "issuer": who issued it, '
+            '"summary": two sentences, "facts": {key: value} with the key numbers (e.g. for a '
+            "payslip gross_pay, net_pay, period; for a contract parties, start, end, monthly_cost,"
+            " notice; for an invoice total, due_date), decimal numbers as strings}.",
+            f"File name: {filename}\n\n{text[:24000]}",
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def answer_from_documents(
+        self,
+        question: str,
+        passages: list[dict[str, Any]],
+        language: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        sources = "\n\n".join(
+            f"[{p['n']}] {p['title']} ({p['date'] or 'no date'}):\n{p['text']}" for p in passages
+        )
+        return await self.complete(
+            f"Answer in {LANG.get(language, 'English')} using ONLY the numbered passages from "
+            "the user's own financial documents. Cite the passages you use as [1], [2]. If the "
+            "passages do not contain the answer, say so plainly and suggest which document "
+            "would. Be short and precise with numbers and dates.",
+            f"Passages:\n{sources}\n\nQuestion: {question}",
+            history=history,
         )

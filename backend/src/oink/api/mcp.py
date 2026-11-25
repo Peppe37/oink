@@ -6,6 +6,8 @@ route it mirrors, so a read-only token gives a read-only assistant."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from collections.abc import Awaitable, Callable
 from datetime import date
@@ -17,9 +19,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from oink.api.deps import get_db
-from oink.core.db import Account, Transaction, User
+from oink.core.db import Account, Document, Transaction, User
 from oink.core.money import MoneyError, as_text, to_minor
 from oink.core.security import token_for
+from oink.services import documents as docs
 from oink.services import planning
 from oink.services import reports as rep
 from oink.services.ai import AI, AIError
@@ -128,6 +131,62 @@ async def _ask(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
         raise ValueError(str(exc)) from exc
 
 
+async def _documents(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
+    query = select(Document).where(Document.user_id == user.id)
+    if a.get("kind"):
+        query = query.where(Document.kind == str(a["kind"]))
+    if a.get("query"):
+        found = {h["document_id"] for h in docs.search(db, user, str(a["query"]), limit=50)}
+        query = query.where(Document.id.in_(found))
+    rows = db.scalars(
+        query.order_by(Document.doc_date.desc().nulls_last()).limit(int(a.get("limit") or 50))
+    )
+    return [docs.to_dict(d) for d in rows]
+
+
+async def _search_documents(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
+    hits = docs.search(db, user, str(a["query"]), int(a.get("limit") or 8), a.get("kind") or None)
+    return [{k: v for k, v in h.items() if k != "snippet"} for h in hits]
+
+
+async def _ask_documents(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
+    try:
+        return await docs.ask(db, user, str(a["question"]), ai)
+    except docs.DocumentError as exc:
+        raise ValueError(exc.code) from exc
+
+
+async def _get_document(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
+    doc = db.get(Document, int(a["id"]))
+    if doc is None or doc.user_id != user.id:
+        raise ValueError("document_unknown")
+    out = docs.to_dict(doc, with_text=True)
+    out["text"] = out["text"][:20000]
+    return out
+
+
+async def _upload_document(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
+    name = str(a["filename"])
+    if a.get("content_base64"):
+        try:
+            raw = base64.b64decode(str(a["content_base64"]), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("content_base64 is not valid base64") from exc
+    else:
+        raw = str(a.get("text") or "").encode()
+    try:
+        stored = await docs.store(
+            db, user, ai.settings.documents_dir, name, raw, ai,
+            kind=a.get("kind") or None, account_id=a.get("account_id"), source="mcp",
+        )  # fmt: skip
+    except docs.DocumentError as exc:
+        raise ValueError(exc.code) from exc
+    out = docs.to_dict(stored.document)
+    out["duplicate"] = stored.duplicate
+    out["import"] = stored.outcome.__dict__ if stored.outcome else None
+    return out
+
+
 TOOLS = [
     Tool("get_overview", "reports:read", "Net worth, this month vs usual, subscriptions.", _obj({}), _overview),
     Tool("list_accounts", "accounts:read", "Accounts with balances (decimal strings, own currency).", _obj({}), _accounts),
@@ -147,6 +206,23 @@ TOOLS = [
          _obj({"symbol": {"type": "string"}, "initial": {"type": "number"}, "monthly": {"type": "number"},
                "years": {"type": "integer"}}, ["symbol"]), _simulate),
     Tool("ask_oink", "ai:ask", "Ask Oink's AI about the user's money.", _obj({"question": {"type": "string"}}, ["question"]), _ask),
+    Tool("list_documents", "documents:read", "The user's financial documents (statements, payslips, "
+         "contracts, invoices, tax, insurance, investment papers), newest first; kind filters, query "
+         "searches their text.", _obj({"kind": {"type": "string", "enum": list(docs.KINDS)},
+                                       "query": {"type": "string"}, "limit": {"type": "integer"}}), _documents),
+    Tool("search_documents", "documents:read", "Full-text search in the documents: the matching passages "
+         "with their document.", _obj({"query": {"type": "string"}, "kind": {"type": "string"},
+                                      "limit": {"type": "integer"}}, ["query"]), _search_documents),
+    Tool("ask_documents", "documents:read", "Answer a question from the documents (e.g. «net pay in "
+         "October?», «when can I cancel the gym contract?»), citing them.",
+         _obj({"question": {"type": "string"}}, ["question"]), _ask_documents),
+    Tool("get_document", "documents:read", "One document with its text (first 20k characters).",
+         _obj({"id": {"type": "integer"}}, ["id"]), _get_document),
+    Tool("upload_document", "documents:write", "File a document (PDF, CSV, OFX, image, text) as base64 "
+         "or plain text. Statements are imported into their account too.",
+         _obj({"filename": {"type": "string"}, "content_base64": {"type": "string"}, "text": {"type": "string"},
+               "kind": {"type": "string", "enum": list(docs.KINDS)}, "account_id": {"type": "integer"}},
+              ["filename"]), _upload_document),
 ]  # fmt: skip
 BY_NAME = {t.name: t for t in TOOLS}
 
