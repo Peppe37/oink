@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import ReactMarkdown from "react-markdown";
+import { Markdown as ReactMarkdown } from "../ui/Markdown";
 import { api, type FixedCosts, type Picture, type Risk } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";

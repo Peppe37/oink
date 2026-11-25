@@ -2,7 +2,7 @@
    updater sidecar to pull the new image; the page waits for the new version and reloads. */
 
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { Markdown as ReactMarkdown } from "../ui/Markdown";
 import { api, type UpdateInfo } from "../api";
 import { useErrorText, useI18n } from "../i18n";
 import { Sheet, Spinner } from "../ui/bits";

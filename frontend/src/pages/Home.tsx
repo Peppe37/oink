@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { Markdown as ReactMarkdown } from "../ui/Markdown";
 import { Link } from "react-router-dom";
 import { api, type Overview, type Report, type User } from "../api";
 import { Glass } from "../glass/Glass";
