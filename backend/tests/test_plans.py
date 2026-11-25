@@ -101,3 +101,42 @@ async def test_three_plans_of_100_on_the_16th_are_investments(
         ) == Decimal("3.5")
         spending = compare(Book.of(s, user), "2026-11")["current"]["spending"]
         assert spending == 0  # the plan's purchases are not spending
+
+
+def test_only_purchases_on_a_brokers_account_are_suggested_and_marking_one_teaches_the_plan(
+    db: Database,
+) -> None:
+    uid, broker = _broker(db)
+    with db.sessions() as s:
+        user = s.get(User, uid)
+        current = Account(user_id=uid, name="Revolut", institution="Revolut", source="linked")
+        s.add(current)
+        s.commit()
+        # a gym, a phone, rent: monthly and the same amount, but on a current account
+        add_movements(s, current, [NewMovement(date(2026, m, 5), -3990, "Palestra FitClub") for m in (9, 10, 11)]
+                      + [NewMovement(date(2026, m, 1), -60000, "Affitto") for m in (9, 10, 11)], "linked")  # fmt: skip
+        found = suggestions(s, user, date(2026, 11, 20))
+        assert [(sg["account"], sg["amount"]) for sg in found] == [("Trade Republic", "100")]
+        # the person marks one purchase: the plan learns its account and day, the rest follow
+        plan = Plan(
+            user_id=uid,
+            symbol="AAPL",
+            amount=Decimal(100),
+            frequency="monthly",
+            start=date(2026, 9, 1),
+        )
+        s.add(plan)
+        s.commit()
+        tx = s.scalars(
+            select(Transaction).where(
+                Transaction.account_id == broker, Transaction.day == date(2026, 9, 16)
+            )
+        ).first()
+        plans_module.link_purchase(s, tx, plan)
+        plan.account_id, plan.day = broker, 16
+        s.commit()
+        match_executions(s, user, date(2026, 11, 20))
+        assert s.query(Transaction).filter(Transaction.plan_id == plan.id).count() == 3
+        plans_module.unlink_purchase(s, tx)
+        match_executions(s, user, date(2026, 11, 20))
+        assert s.get(Transaction, tx.id).plan_id is None  # «not a purchase»: it stays so

@@ -3,6 +3,7 @@
 
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, type Account, type Holdings, type PlanItem, type PlanSuggestion, type SearchHit, type Simulation } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
@@ -35,6 +36,13 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
     api.accounts().then(setAccounts).catch(() => undefined);
   }, [notify, errorText]);
   const openPlan = (p: Partial<PlanItem> | null, edit: PlanItem | null = null) => { setPreset(p); setEditing(edit); setAdding("plan"); };
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const amount = params.get("plan");
+    if (!amount) return;
+    openPlan({ amount, day: Number(params.get("day")) || null, account_id: Number(params.get("account")) || null });
+    setParams({}, { replace: true });
+  }, [params, setParams]);
   useEffect(load, [load]);
   const cur = holdings?.currency ?? currency;
 

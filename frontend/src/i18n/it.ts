@@ -572,4 +572,12 @@ export const it: Dict = {
   "invest.dayOfMonth": "Giorno del mese",
   "invest.end": "Fine",
   "movements.pending": "In attesa",
+  "movements.markAs": "Questo movimento è…",
+  "movements.asPlan": "Un acquisto del PAC",
+  "movements.asFixed": "Una spesa fissa",
+  "movements.fixedAdded": "Aggiunta alle spese fisse: Oink se l'aspetta ogni mese.",
+  "movements.isPurchase": "Un acquisto del piano {plan}",
+  "movements.notPurchase": "Non è un acquisto del piano",
+  "movements.newPlan": "Nuovo piano…",
+  "movements.newPlanHint": "Imposta un piano da {amount} a partire da questo acquisto",
 };

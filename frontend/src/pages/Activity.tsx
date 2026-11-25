@@ -3,7 +3,8 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { api, type Account, type Tx } from "../api";
+import { useNavigate } from "react-router-dom";
+import { api, type Account, type PlanItem, type Tx } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { Empty, Field, PageHeader, Sheet, Spinner, rise, stagger } from "../ui/bits";
@@ -166,6 +167,7 @@ function TxSheet({ tx, onClose, onSaved, onDeleted }: { tx: Tx | null; onClose: 
         {tx.counterparty && tx.description !== tx.counterparty && <div className="faint small-text">{tx.description}</div>}
         {tx.category_by === "transfer" && <div className="pill-note">{tx.transfer_id ? t("transfers.paired") : t("transfers.untracked")}</div>}
       </div>
+      {Number(tx.amount) < 0 && <MarkAs tx={tx} onDone={onSaved} />}
       <h4 className="section-label">{t("movements.category")}</h4>
       <div className="cat-grid">
         {CATEGORIES.map((c) => (
@@ -237,5 +239,61 @@ function AddSheet({ open, accounts, onClose, onAdded }: { open: boolean; account
         <button className="btn big-btn">{t("common.add")}</button>
       </form>
     </Sheet>
+  );
+}
+
+/** «This is…»: a purchase of a savings plan, or a fixed cost. One tap, filled in from the
+ *  movement; the plan learns its account and day, so its other months follow by themselves. */
+function MarkAs({ tx, onDone }: { tx: Tx; onDone: (tx: Tx) => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const navigate = useNavigate();
+  const [plans, setPlans] = useState<PlanItem[] | null>(null);
+  const [mode, setMode] = useState<"" | "plan">("");
+  const [msg, setMsg] = useState("");
+  useEffect(() => { api.plans().then(setPlans).catch(() => setPlans([])); }, [tx.id]);
+  const linked = plans?.find((p) => p.id === tx.plan_id);
+  const amount = Math.abs(Number(tx.amount)).toFixed(2);
+  const asPlan = async (planId: number) => {
+    try { await api.markPurchase(tx.id, planId); onDone({ ...tx, plan_id: planId, category: "investments", category_by: "plan" }); }
+    catch (e) { setMsg(errorText(e)); }
+  };
+  const asFixed = async () => {
+    const next = new Date(tx.day); next.setMonth(next.getMonth() + 1);
+    try {
+      await api.addFixed({ name: tx.counterparty || tx.description, amount, currency: tx.currency, frequency: "monthly",
+        category: tx.category || undefined, next_due: next.toISOString().slice(0, 10), match: (tx.counterparty || tx.description).slice(0, 60) });
+      setMsg(t("movements.fixedAdded"));
+    } catch (e) { setMsg(errorText(e)); }
+  };
+  if (linked) return (
+    <div className="mark-as">
+      <span className="pill-note">{t("movements.isPurchase", { plan: linked.name || linked.symbol })}</span>
+      <button className="btn ghost small" onClick={async () => { await api.unmarkPurchase(tx.id); onDone({ ...tx, plan_id: null, category: "", category_by: "user" }); }}>{t("movements.notPurchase")}</button>
+    </div>
+  );
+  return (
+    <div className="mark-as">
+      <h4 className="section-label">{t("movements.markAs")}</h4>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <button className={`chip ${mode === "plan" ? "on" : ""}`} onClick={() => setMode(mode === "plan" ? "" : "plan")}><Icon name="investments" size={15} /> {t("movements.asPlan")}</button>
+        <button className="chip" onClick={asFixed}><Icon name="bills" size={15} /> {t("movements.asFixed")}</button>
+      </div>
+      {mode === "plan" && plans && (
+        <div className="list" style={{ marginTop: 8 }}>
+          {plans.map((p) => (
+            <button key={p.id} className="item press-row" onClick={() => asPlan(p.id)}>
+              <span className="item-main"><span className="row-text"><span className="row-title">{p.name || p.symbol}</span>
+                <span className="row-detail">{fmt.money(p.amount, p.currency)} · {p.symbol}</span></span></span>
+            </button>
+          ))}
+          <button className="item press-row" onClick={() => navigate(`/invest?plan=${amount}&day=${new Date(tx.day).getDate()}&account=${tx.account_id}`)}>
+            <span className="item-main"><span className="row-text"><span className="row-title">{t("movements.newPlan")}</span>
+              <span className="row-detail">{t("movements.newPlanHint", { amount: fmt.money(amount, tx.currency) })}</span></span></span>
+          </button>
+        </div>
+      )}
+      {msg && <p className="muted small-text" style={{ margin: "6px 0 0" }}>{msg}</p>}
+    </div>
   );
 }

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import calendar
 import logging
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -22,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oink.core.db import Account, Holding, Plan, Transaction, User
+from oink.core.db import Account, FixedCost, Holding, Plan, Transaction, User
 from oink.core.money import MoneyError, from_minor, to_minor
 from oink.services.ledger import INTERNAL
 from oink.services.markets import MarketError, close_on, daily_closes
@@ -162,11 +163,57 @@ def extra_units(
     return Decimal(positions["units"]) * len(share) / len(positions["days"])
 
 
+#: Where plans are bought: brokers and investment apps (their cash accounts).
+BROKERS = ("trade republic", "scalable", "directa", "degiro", "fineco", "young platform",
+           "bitpanda", "kraken", "binance", "coinbase", "etoro", "moneyfarm", "satispay",
+           "revolut invest", "trading 212", "xtb", "freedom24", "interactive brokers")  # fmt: skip
+#: Wording of a purchase in a plan, in the usual languages.
+PLAN_WORDS = (
+    "sparplan",
+    "savings plan",
+    "piano di accumulo",
+    "pac ",
+    "esecuzione piano",
+    "buy trade",
+    "acquisto",
+    "kauf",
+    "achat",
+    "compra",
+    "isin",
+    "etf",
+    "invest",
+)
+ISIN = re.compile(r"\b[A-Z]{2}[A-Z0-9]{9}\d\b")
+
+
+def _looks_like_purchase(t: Transaction, account: Account | None) -> bool:
+    """Only a broker's account, and only debits worded like a purchase or not worded at
+    all (Trade Republic through the bank link gives no description): never a bill, a
+    subscription or a fixed cost of a current account."""
+    text = f" {(t.description or '').lower()} {(t.counterparty or '').lower()} "
+    broker = account is not None and (
+        account.kind == "investment"
+        or any(b in f" {account.institution} {account.name} ".lower() for b in BROKERS)
+    )
+    worded = any(w in text for w in PLAN_WORDS) or bool(ISIN.search(t.description or ""))
+    blank = not (t.description or "").strip("—- ") and not (t.counterparty or "").strip()
+    already = t.category_by in ("user", "rule") and t.category not in ("", "investments", "other")
+    return not already and (
+        (broker and (blank or worded)) or (worded and bool(ISIN.search(text.upper())))
+    )
+
+
 def suggestions(db: Session, user: User, today: date | None = None) -> list[dict[str, Any]]:
-    """Debits repeating every month with the same amount around the same day, matched by
-    no plan and no transfer: probably a savings plan to set up."""
+    """Purchases repeating every month with the same amount around the same day, on a
+    broker's account, matched by no plan: probably a savings plan to set up."""
     today = today or date.today()
     since = today - timedelta(days=200)
+    accounts = {a.id: a for a in db.scalars(select(Account).where(Account.user_id == user.id))}
+    fixed = [
+        f.match.lower()
+        for f in db.scalars(select(FixedCost).where(FixedCost.user_id == user.id))
+        if f.match
+    ]
     groups: dict[tuple[int, int, int], list[Transaction]] = defaultdict(list)
     for t in db.scalars(
         select(Transaction).where(
@@ -177,7 +224,11 @@ def suggestions(db: Session, user: User, today: date | None = None) -> list[dict
             Transaction.transfer_id.is_(None),
         )
     ):
-        if t.category_by == "transfer":
+        if t.category_by == "transfer" or t.source == "pending":
+            continue
+        if any(m in f"{t.description} {t.counterparty}".lower() for m in fixed):
+            continue  # already a fixed cost
+        if not _looks_like_purchase(t, accounts.get(t.account_id)):
             continue
         groups[(t.account_id, t.amount, (t.day.day - 1) // 5)].append(t)
     out = []
@@ -185,7 +236,7 @@ def suggestions(db: Session, user: User, today: date | None = None) -> list[dict
         months = {(t.day.year, t.day.month) for t in txs}
         if len(months) < 2:
             continue
-        account = db.get(Account, account_id)
+        account = accounts.get(account_id)
         out.append({
             "account_id": account_id, "account": account.name if account else "",
             "amount": str(-from_minor(amount, txs[0].currency)), "currency": txs[0].currency,
@@ -194,3 +245,20 @@ def suggestions(db: Session, user: User, today: date | None = None) -> list[dict
             "last": max(t.day for t in txs).isoformat(),
         })  # fmt: skip
     return sorted(out, key=lambda s: (-s["months"], s["account"]))
+
+
+def link_purchase(db: Session, tx: Transaction, plan: Plan) -> None:
+    """The person says: this debit is a purchase of that plan."""
+    tx.plan_id, tx.category, tx.category_by = plan.id, "investments", "plan"
+    if tx.transfer_id is not None:
+        from oink.services.transfers import unlink
+
+        unlink(db, tx)
+    db.commit()
+
+
+def unlink_purchase(db: Session, tx: Transaction) -> None:
+    tx.plan_id = None
+    if tx.category_by == "plan":
+        tx.category, tx.category_by = "", "user"  # not a purchase: don't match it again
+    db.commit()

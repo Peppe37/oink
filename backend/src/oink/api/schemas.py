@@ -115,6 +115,7 @@ class TransactionOut(BaseModel):
     note: str
     source: str
     transfer_id: int | None = None
+    plan_id: int | None = None
 
     @classmethod
     def of(cls, t: Transaction) -> TransactionOut:
@@ -130,6 +131,7 @@ class TransactionOut(BaseModel):
             category_by=t.category_by,
             note=t.note,
             transfer_id=t.transfer_id,
+            plan_id=t.plan_id,
             source=t.source,
         )
 

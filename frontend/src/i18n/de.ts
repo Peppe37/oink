@@ -572,4 +572,12 @@ export const de: Dict = {
   "invest.dayOfMonth": "Tag im Monat",
   "invest.end": "Ende",
   "movements.pending": "Vorgemerkt",
+  "movements.markAs": "Das ist…",
+  "movements.asPlan": "Ein Sparplan-Kauf",
+  "movements.asFixed": "Fixkosten",
+  "movements.fixedAdded": "Zu den Fixkosten hinzugefügt: Oink erwartet sie jeden Monat.",
+  "movements.isPurchase": "Ein Kauf des Plans {plan}",
+  "movements.notPurchase": "Kein Kauf des Plans",
+  "movements.newPlan": "Neuer Plan…",
+  "movements.newPlanHint": "Einen Plan über {amount} ab diesem Kauf einrichten",
 };

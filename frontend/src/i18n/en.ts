@@ -574,6 +574,14 @@ export const en = {
   "invest.dayOfMonth": "Day of the month",
   "invest.end": "End",
   "movements.pending": "Pending",
+  "movements.markAs": "This is…",
+  "movements.asPlan": "A savings plan purchase",
+  "movements.asFixed": "A fixed cost",
+  "movements.fixedAdded": "Added to fixed costs: Oink will expect it every month.",
+  "movements.isPurchase": "A purchase of the plan {plan}",
+  "movements.notPurchase": "Not a plan purchase",
+  "movements.newPlan": "New plan…",
+  "movements.newPlanHint": "Set up a plan of {amount} starting from this purchase",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

@@ -10,7 +10,7 @@ export type Account = {
 };
 export type Tx = {
   id: number; account_id: number; day: string; amount: string; currency: string; description: string;
-  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null;
+  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null; plan_id?: number | null;
 };
 export type Recurring = { name: string; monthly: number; last: number; increased: boolean; category: string; last_day: string };
 export type MonthSummary = {
@@ -192,6 +192,8 @@ export const api = {
   plans: () => call<PlanItem[]>("/plans"),
   addPlan: (body: Omit<PlanItem, "id" | "position">) => call<PlanItem>("/plans", { method: "POST", body: json(body) }),
   updatePlan: (id: number, body: Omit<PlanItem, "id" | "position">) => call<PlanItem>(`/plans/${id}`, { method: "PATCH", body: json(body) }),
+  markPurchase: (txId: number, planId: number) => call(`/transactions/${txId}/plan`, { method: "POST", body: json({ plan_id: planId }) }),
+  unmarkPurchase: (txId: number) => call(`/transactions/${txId}/plan`, { method: "DELETE" }),
   planSuggestions: () => call<PlanSuggestion[]>("/plans/suggestions"),
   deletePlan: (id: number) => call(`/plans/${id}`, { method: "DELETE" }),
   search: (q: string) => call<SearchHit[]>(`/markets/search?${query({ q })}`),

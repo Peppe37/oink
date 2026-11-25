@@ -17,7 +17,13 @@ from oink.core.money import MoneyError, normalise_code
 from oink.services import planning
 from oink.services.ai import AI, AIError
 from oink.services.markets import MarketError, history, quote, search
-from oink.services.plans import match_executions, plan_positions, suggestions
+from oink.services.plans import (
+    link_purchase,
+    match_executions,
+    plan_positions,
+    suggestions,
+    unlink_purchase,
+)
 from oink.services.reports import Book
 from oink.services.simulate import (
     MonteCarlo,
@@ -207,6 +213,44 @@ async def plans(
     return [
         _plan_out(p, positions) for p in db.scalars(select(Plan).where(Plan.user_id == who.user_id))
     ]
+
+
+class PurchaseIn(BaseModel):
+    plan_id: int
+
+
+def _own_tx(db: Session, who: Caller, tx_id: int) -> Transaction:
+    tx = db.get(Transaction, tx_id)
+    if tx is None or tx.user_id != who.user_id:
+        raise HTTPException(404, "transaction_unknown")
+    return tx
+
+
+@router.post("/transactions/{tx_id}/plan")
+def mark_purchase(
+    tx_id: int, body: PurchaseIn, who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    """«This debit is a purchase of that plan»: an investment, and its units counted."""
+    tx = _own_tx(db, who, tx_id)
+    plan = db.get(Plan, body.plan_id)
+    if plan is None or plan.user_id != who.user_id:
+        raise HTTPException(404, "plan_unknown")
+    if plan.account_id is None:
+        plan.account_id = tx.account_id  # now Oink knows where this plan is paid from
+    if plan.day is None:
+        plan.day = tx.day.day
+    link_purchase(db, tx, plan)
+    match_executions(db, who.user)  # the plan's other months follow
+    return {"ok": True, "plan_id": plan.id}
+
+
+@router.delete("/transactions/{tx_id}/plan")
+def unmark_purchase(
+    tx_id: int, who: Caller = Depends(require("transactions:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    unlink_purchase(db, _own_tx(db, who, tx_id))
+    return {"ok": True}
 
 
 @router.get("/plans/suggestions")
