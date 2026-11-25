@@ -18,6 +18,7 @@ dependencies = [
     "litellm>=1.52",
     "alembic>=1.20.1",
     "cryptography>=50.0.2",
+    "redis>=5.2",
 ]
 
 [project.scripts]
@@ -59,3 +60,5 @@ plugins = ["pydantic.mypy"]
 "src/oink/api/planning.py" = ["E501"]
 "src/oink/providers/directory.py" = ["E501"]
 "src/oink/migrations/*" = ["E501"]
+"src/oink/services/verify.py" = ["E501"]  # one rule per line, in five languages
+"src/oink/services/stores.py" = ["E501"]  # Cypher reads better on one line

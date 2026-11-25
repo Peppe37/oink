@@ -65,6 +65,19 @@ class Settings(BaseSettings):
     update_check: bool = True
     update_repo: str = "Peppe37/oink"
 
+    # The documents engine and its stores, all optional (without them: SQLite full-text
+    # search and the built-in readers). They can be the bundled ones or shared instances
+    # (own collection / graph / key prefix), e.g. those of another app of the homelab.
+    engine_url: str = Field(default="", description="Oink engine (Docling + BGE-M3).")
+    engine_token: str = ""
+    qdrant_url: str = Field(default="", description="Vector store for the documents.")
+    qdrant_key: str = Field(default="", description="API key or a token for one collection.")
+    qdrant_collection: str = "oink_documents"
+    redis_url: str = Field(default="", description="Cache, e.g. redis://user:pass@host:6379/0")
+    cache_prefix: str = "oink:"
+    falkordb_url: str = Field(default="", description="Knowledge graph (FalkorDB).")
+    graph_name: str = "oink"
+
     @property
     def db_url(self) -> str:
         return f"sqlite:///{self.data_dir / 'oink.db'}"

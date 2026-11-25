@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from datetime import date
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from oink.services import documents as docs
 from oink.services.ai import AI
 
 router = APIRouter(prefix="/api/documents")
+_TASKS: set[asyncio.Task[None]] = set()  # documents being read in the background
 Kind = Literal[
     "statement",
     "payslip",
@@ -85,10 +87,13 @@ def list_documents(
     kind: Kind | None = None,
     q: str = Query(default="", max_length=200),
     year: int | None = None,
+    status: Literal["processing", "ready", "review", "error"] | None = None,
     who: Caller = Depends(require("documents:read")),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     query = select(Document).where(Document.user_id == who.user_id)
+    if status:
+        query = query.where(Document.status == status)
     if kind:
         query = query.where(Document.kind == kind)
     if year:
@@ -125,29 +130,45 @@ async def upload(
     """Any financial document. A statement is also imported into its account (the IBAN on it
     picks the account, or `account_id`); `import.added` says how many movements came in."""
     raw = await file.read(docs.MAX_FILE + 1)
+    stores = docs.stores_in_use()
+    later = stores is not None and stores.engine.enabled  # Docling takes a while: reply now
     try:
         stored = await docs.store(
-            db, who.user, _folder(request), file.filename or "document", raw, _ai(request),
-            kind=kind, account_id=account_id, import_statement=import_statement,
+            db,
+            who.user,
+            _folder(request),
+            file.filename or "document",
+            raw,
+            _ai(request),
+            kind=kind,
+            account_id=account_id,
+            import_statement=import_statement,
             source="upload" if who.browser else "api",
-        )  # fmt: skip
+            later=later,
+        )
     except docs.DocumentError as exc:
         raise _fail(exc) from exc
+    if later and not stored.duplicate:
+        task = asyncio.create_task(
+            docs.process_later(
+                request.app.state.db.sessions, stored.document.id, _ai(request), _folder(request)
+            )
+        )
+        _TASKS.add(task)
+        task.add_done_callback(_TASKS.discard)
     return _outcome(stored)
 
 
 @router.get("/search")
-def search_documents(
+async def search_documents(
     q: str = Query(min_length=2, max_length=300),
     kind: Kind | None = None,
     limit: int = Query(default=8, ge=1, le=30),
     who: Caller = Depends(require("documents:read")),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    return [
-        {k: v for k, v in h.items() if k != "text"}
-        for h in docs.search(db, who.user, q, limit, kind)
-    ]
+    hits = await docs.find(db, who.user, q, limit, kind)
+    return [{k: v for k, v in h.items() if k != "text"} for h in hits]
 
 
 @router.post("/ask")
@@ -196,9 +217,12 @@ def document_file(
     if shown != "application/pdf":
         headers["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src 'self'"
     return FileResponse(
-        path, media_type=shown, filename=doc.filename,
-        content_disposition_type="attachment" if download else "inline", headers=headers,
-    )  # fmt: skip
+        path,
+        media_type=shown,
+        filename=doc.filename,
+        content_disposition_type="attachment" if download else "inline",
+        headers=headers,
+    )
 
 
 @router.patch("/{doc_id}")
@@ -240,11 +264,14 @@ async def import_document(
             docs._own_account(db, who.user, body.account_id)
         except docs.DocumentError as exc:
             raise _fail(exc) from exc
-    outcome = await docs.import_into(
-        db, who.user, doc, path.read_bytes(), _ai(request), body.account_id
-    )
-    if outcome is not None and doc.kind != "statement":
-        doc.kind = "statement"
+    if not (doc.review or {}).get("rows"):  # filed as something else: read it as a statement
+        doc.review = {**(doc.review or {}), "wanted_kind": "statement", "import": False}
+        await docs.process(db, who.user, doc, path.read_bytes(), _ai(request), docs.stores_in_use())
+    # importing a document «to review» is the person's decision: it stands
+    outcome = docs.import_into(db, who.user, doc, body.account_id)
+    if outcome is not None:
+        doc.kind, doc.status = "statement", "ready"
+        doc.review = {**(doc.review or {}), "confirmed": True}
     db.commit()
     if outcome is None:
         raise HTTPException(422, doc.import_note or "nothing_found")
@@ -254,11 +281,41 @@ async def import_document(
 
 
 @router.delete("/{doc_id}", status_code=204)
-def delete_document(
+async def delete_document(
     doc_id: int,
     request: Request,
     who: Caller = Depends(require("documents:write")),
     db: Session = Depends(get_db),
 ) -> None:
     """Removes the file and its index. Movements imported from it stay in the account."""
-    docs.remove(db, _folder(request), _mine(db, who, doc_id))
+    await docs.remove(db, _folder(request), _mine(db, who, doc_id))
+
+
+@router.post("/{doc_id}/reprocess")
+async def reprocess_document(
+    doc_id: int,
+    request: Request,
+    who: Caller = Depends(require("documents:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Read and check the document again (after a fix, or once the engine is up)."""
+    doc = _mine(db, who, doc_id)
+    path = docs.path_of(_folder(request), doc)
+    if not path.is_file():
+        raise HTTPException(404, "file_missing")
+    doc.status = "processing"
+    db.commit()
+    await docs.process(db, who.user, doc, path.read_bytes(), _ai(request), docs.stores_in_use())
+    return docs.to_dict(doc)
+
+
+@router.post("/{doc_id}/dismiss")
+def dismiss_review(
+    doc_id: int, who: Caller = Depends(require("documents:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """«Checked, it's fine as it is»: out of the review list, nothing imported."""
+    doc = _mine(db, who, doc_id)
+    doc.status = "ready"
+    doc.review = {**(doc.review or {}), "dismissed": True}
+    db.commit()
+    return docs.to_dict(doc)

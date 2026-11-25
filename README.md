@@ -129,6 +129,28 @@ The admin does this once, in the app: **Settings → Bank access**.
 From then on everyone links their banks from **Accounts → Add account → Bank**. Consents last
 up to 180 days; Oink syncs every `OINK_SYNC_HOURS` (6 by default).
 
+### Documents engine (optional)
+
+For layouts, tables and scans, and for hybrid search, run the engine and point Oink at the
+stores (bundled in `docker-compose.yml` under the `engine` and `stores` profiles, or
+instances you already run: Oink keeps to its own Qdrant collection, FalkorDB graph and
+Redis key prefix):
+
+- **Docling** reads every PDF and image: layout, tables (statements), OCR of scans.
+- **BGE-M3** (1024-dim dense + sparse vectors, 1024 tokens per chunk) feeds **Qdrant**:
+  search is hybrid (meaning + exact words and numbers) and fused with SQLite full-text.
+- **FalkorDB** links documents, accounts and organisations; **Redis** caches extractions
+  and embeddings.
+- Each model runs in its own process, started on demand and stopped after
+  `ENGINE_IDLE_SECONDS` (5 minutes) without use: the idle engine takes ~70 MB of RAM.
+  No generative AI runs locally.
+
+Numbers are never left to the AI: movements come from the statement's tables by rules, and
+every document with totals is reconciled (opening balance + movements = closing balance,
+gross − deductions = net, taxable + VAT = total). What doesn't add up isn't imported: it
+waits in **To review** with the difference, and the AI (if configured) adds a note on
+what is likely wrong. You decide: import anyway, fix, or dismiss.
+
 ## Single sign-on (Keycloak and friends)
 
 Create an OpenID Connect client (confidential or public with PKCE) with redirect URI

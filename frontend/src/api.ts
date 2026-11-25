@@ -65,6 +65,12 @@ export type Doc = {
   id: number; kind: DocKind; title: string; filename: string; mime: string; size: number; summary: string; issuer: string;
   date: string | null; facts: Record<string, string | number> & { proposed_account?: ProposedAccount }; account_id: number | null; imported: number | null;
   import_note: string; source: string; created: string; has_text: boolean; text?: string;
+  status: "processing" | "ready" | "review" | "error"; review: DocReview; rows?: [string, string, string, string][];
+};
+export type DocCheck = { name: string; ok: boolean | null; detail: Record<string, string> };
+export type DocReview = {
+  checks?: DocCheck[]; movements: number; engine?: boolean; confirmed?: boolean; dismissed?: boolean; error?: string;
+  ai?: { explanation?: string; suggestions?: string[]; confidence?: string };
 };
 export type DocUpload = Doc & { duplicate: boolean; import: ImportResult | null };
 export type DocSource = { n: number; document_id: number; title: string; date: string | null; snippet: string };
@@ -131,7 +137,9 @@ export const api = {
   skipRequest: (id: number) => call(`/requests/${id}/skip`, { method: "POST" }),
 
   untrackedTransfers: () => call<{ institution: string; currency: string; count: number; total: string; last: string }[]>("/transfers/untracked"),
-  documents: (params: { kind?: string; q?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
+  reprocessDocument: (id: number) => call<Doc>(`/documents/${id}/reprocess`, { method: "POST" }),
+  dismissDocument: (id: number) => call<Doc>(`/documents/${id}/dismiss`, { method: "POST" }),
+  documents: (params: { kind?: string; q?: string; status?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
   document: (id: number) => call<Doc>(`/documents/${id}`),
   uploadDocument: (file: File, opts: { kind?: string; accountId?: number } = {}) => {
     const form = new FormData();

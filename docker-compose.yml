@@ -3,7 +3,7 @@ services:
     image: ghcr.io/peppe37/oink:${OINK_TAG:-latest}
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${OINK_BIND:-0.0.0.0}:${OINK_PORT:-8080}:8080"
     env_file: .env
     volumes:
       - ./data:/data
@@ -22,3 +22,48 @@ services:
       - ${PWD}:${PWD}:ro
       - ./updater:/updater:ro
       - ./data/updater:/data/updater
+
+  # Optional: the documents engine (Docling + BGE-M3, CPU, amd64). Models download on
+  # first use into ./data/models and leave memory after ENGINE_IDLE_SECONDS without use.
+  # Then set OINK_ENGINE_URL=http://engine:8090 and OINK_ENGINE_TOKEN (= ENGINE_TOKEN).
+  #   docker compose --profile engine up -d
+  engine:
+    image: ghcr.io/peppe37/oink-engine:${OINK_TAG:-latest}
+    profiles: [engine]
+    restart: unless-stopped
+    environment:
+      ENGINE_TOKEN: ${ENGINE_TOKEN:-}
+      ENGINE_IDLE_SECONDS: ${ENGINE_IDLE_SECONDS:-300}
+      ENGINE_MAX_TOKENS: ${ENGINE_MAX_TOKENS:-1024}
+      ENGINE_OCR: ${ENGINE_OCR:-on}
+    volumes:
+      - ./data/models:/models
+    mem_limit: ${ENGINE_MEM_LIMIT:-4g}
+
+  # Optional: bundled stores, for a host that doesn't already run them. Point
+  # OINK_QDRANT_URL / OINK_REDIS_URL / OINK_FALKORDB_URL at them, or at shared instances
+  # you already have (Oink keeps to its own collection, graph and key prefix).
+  #   docker compose --profile stores up -d
+  qdrant:
+    image: qdrant/qdrant:v1.19.1-unprivileged
+    profiles: [stores]
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+  redis:
+    image: redis:8.10
+    profiles: [stores]
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-change-me}",
+              "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+  falkordb:
+    image: falkordb/falkordb-server:v4.22.0
+    profiles: [stores]
+    restart: unless-stopped
+    environment:
+      REDIS_ARGS: --requirepass ${FALKORDB_PASSWORD:-change-me} --appendonly yes
+    volumes:
+      - ./data/falkordb:/var/lib/falkordb/data

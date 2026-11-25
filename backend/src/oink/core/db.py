@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -253,6 +254,10 @@ class Document(Base):
     imported: Mapped[int | None] = mapped_column(Integer, nullable=True)  # movements added
     import_note: Mapped[str] = mapped_column(String(60), default="")  # why it was not imported
     source: Mapped[str] = mapped_column(String(16), default="upload")  # upload|inbox|api|mcp
+    #: processing | ready | review (something didn't add up: see `review`) | error
+    status: Mapped[str] = mapped_column(String(12), default="ready")
+    #: checks by rules, the AI's note, movements read from a statement (to import on confirm)
+    review: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

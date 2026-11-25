@@ -145,7 +145,9 @@ async def _documents(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
 
 
 async def _search_documents(db: Session, user: User, ai: AI, a: dict[str, Any]) -> Any:
-    hits = docs.search(db, user, str(a["query"]), int(a.get("limit") or 8), a.get("kind") or None)
+    hits = await docs.find(
+        db, user, str(a["query"]), int(a.get("limit") or 8), a.get("kind") or None
+    )
     return [{k: v for k, v in h.items() if k != "snippet"} for h in hits]
 
 

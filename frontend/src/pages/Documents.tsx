@@ -32,6 +32,8 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
   const [docs, setDocs] = useState<Doc[] | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [kind, setKind] = useState<DocKind | "">("");
+  const [onlyReview, setOnlyReview] = useState(false);
+  const [toReview, setToReview] = useState(0);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Doc | null>(null);
   const [busy, setBusy] = useState("");
@@ -39,8 +41,11 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
   const input = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
-    api.documents({ kind: kind || undefined, q: q.trim() || undefined }).then(setDocs).catch((e) => notify(errorText(e)));
-  }, [kind, q, notify, errorText]);
+    api.documents({ kind: kind || undefined, q: q.trim() || undefined, status: onlyReview ? "review" : undefined }).then(setDocs).catch((e) => notify(errorText(e)));
+    api.documents({ status: "review" }).then((r) => setToReview(r.length)).catch(() => undefined);
+  }, [kind, q, onlyReview, notify, errorText]);
+  const reading = (docs ?? []).some((d) => d.status === "processing");
+  useEffect(() => { if (!reading) return; const timer = setInterval(load, 3000); return () => clearInterval(timer); }, [reading, load]);
   useEffect(() => { const timer = setTimeout(load, q ? 250 : 0); return () => clearTimeout(timer); }, [load, q]);
   useEffect(() => { api.accounts().then(setAccounts).catch(() => undefined); }, []);
   const accountName = (id: number | null) => accounts.find((a) => a.id === id)?.name ?? "";
@@ -50,7 +55,8 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
       setBusy(file.name);
       try {
         const r = await api.uploadDocument(file);
-        if (r.import_note === "account_not_recognised" && r.facts.proposed_account) { setOpen(r); notify(t("docs.newAccountFound")); }
+        if (r.status === "processing") notify(t("docs.reading", { name: file.name }));
+        else if (r.import_note === "account_not_recognised" && r.facts.proposed_account) { setOpen(r); notify(t("docs.newAccountFound")); }
         else if (r.duplicate) notify(t("docs.duplicate", { title: r.title }));
         else if (r.import?.added) notify(t("docs.imported", { title: r.title, count: r.import.added }));
         else notify(t("docs.uploaded", { title: r.title }));
@@ -81,6 +87,15 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
         </button>} />
       <input ref={input} type="file" multiple hidden accept=".pdf,.csv,.tsv,.txt,.ofx,.qfx,.md,.json,.xml,.png,.jpg,.jpeg,.webp,image/*"
         onChange={(e) => { if (e.target.files?.length) upload(e.target.files); e.target.value = ""; }} />
+
+      {(toReview > 0 || onlyReview) && (
+        <motion.div variants={rise}>
+          <Glass className="banner review-banner" variant="tight">
+            <span className="row" style={{ gap: 10 }}><Icon name="shield" /> {onlyReview ? t("docs.reviewShowing") : t("docs.reviewCount", { count: toReview })}</span>
+            <button className="btn ghost small" onClick={() => setOnlyReview((v) => !v)}>{onlyReview ? t("docs.all") : t("docs.reviewOpen")}</button>
+          </Glass>
+        </motion.div>
+      )}
 
       <motion.div variants={rise}><DocChat ai={ai} onOpen={(id) => api.document(id).then(setOpen).catch((e) => notify(errorText(e)))} /></motion.div>
 
@@ -114,6 +129,9 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
                 <Row key={d.id} onClick={() => api.document(d.id).then(setOpen).catch((e) => notify(errorText(e)))} chevron
                   icon={<Tile icon={LOOK[d.kind].icon} from={LOOK[d.kind].colors[0]} to={LOOK[d.kind].colors[1]} size={38} />}
                   title={d.title}
+                  right={d.status === "processing" ? <span className="badge soft"><Spinner /> {t("docs.status.processing")}</span>
+                    : d.status === "review" ? <span className="badge warn">{t("docs.status.review")}</span>
+                    : d.status === "error" ? <span className="badge warn">{t("docs.status.error")}</span> : undefined}
                   detail={[t(kindKey(d.kind)), d.issuer, d.date && fmt.date(d.date, { day: "numeric", month: "short", year: "numeric" }),
                     d.imported != null && d.account_id ? t("docs.importedInto", { count: d.imported, account: accountName(d.account_id) }) : "",
                     d.kind === "statement" && d.imported == null ? t("docs.notImported") : ""].filter(Boolean).join(" · ")} />
@@ -240,7 +258,9 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
           <a className="btn ghost small" href={api.documentUrl(doc.id, true)}><Icon name="download" size={16} /> {t("docs.download")}</a>
           <button className="btn ghost small danger" onClick={remove}><Icon name="trash" size={16} /> {t("docs.delete")}</button>
         </div>
-        {!doc.has_text && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
+        {doc.status === "review" && <ReviewCard doc={doc} accounts={accounts} target={target} notify={notify} onChanged={onChanged} />}
+        {doc.status === "processing" && <p className="note"><Spinner /> {t("docs.status.processing")}</p>}
+        {!doc.has_text && doc.status !== "processing" && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
         {doc.summary && <div><h4 className="section-label">{t("docs.summary")}</h4><p style={{ margin: 0 }}>{doc.summary}</p></div>}
         {doc.import_note === "account_not_recognised" && doc.facts.proposed_account && (
           <NewAccountCard doc={doc} proposed={doc.facts.proposed_account} notify={notify} onDone={async () => onChanged(await api.document(doc.id))} />
@@ -317,6 +337,59 @@ function NewAccountCard({ doc, proposed, notify, onDone }: { doc: Doc; proposed:
         </Field>
       </div>
       <button className="btn" onClick={create} disabled={busy || !form.name.trim()}>{busy ? <Spinner /> : <Icon name="plus" size={16} />} {t("docs.newAccountCreate")}</button>
+    </div>
+  );
+}
+
+/** What didn't add up, what the AI thinks of it, and the person's decision. */
+function ReviewCard({ doc, accounts, target, notify, onChanged }: {
+  doc: Doc; accounts: Account[]; target: number | ""; notify: (s: string) => void; onChanged: (d: Doc) => void;
+}) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [busy, setBusy] = useState("");
+  const money = (v?: string) => (v == null ? "—" : fmt.money(v, accounts.find((a) => a.id === doc.account_id)?.currency ?? "EUR"));
+  const act = async (what: string, run: () => Promise<Doc>) => {
+    setBusy(what);
+    try { onChanged(await run()); notify(t("docs.saved")); } catch (e) { notify(errorText(e)); } finally { setBusy(""); }
+  };
+  const ai = doc.review.ai;
+  return (
+    <div className="review-card">
+      <p style={{ margin: 0 }}><strong>{t("docs.reviewTitle")}</strong></p>
+      {(doc.review.checks ?? []).filter((c) => c.ok !== true).map((c) => (
+        <p key={c.name} className="small-text" style={{ margin: 0 }}>
+          {c.ok === false && c.name === "statement_balance" ? t("docs.check.statementBalance", { opening: money(c.detail.opening), movements: money(c.detail.movements), expected: money(c.detail.expected), closing: money(c.detail.closing), difference: money(c.detail.difference) })
+            : c.ok === false && c.name === "payslip_net" ? t("docs.check.payslipNet", { gross: money(c.detail.gross), deductions: money(c.detail.deductions), expected: money(c.detail.expected), net: money(c.detail.net) })
+            : c.ok === false && c.name === "invoice_total" ? t("docs.check.invoiceTotal", { expected: money(c.detail.expected), total: money(c.detail.total) })
+            : t(`docs.check.reason.${c.detail.reason ?? "unknown"}` as Key)}
+        </p>
+      ))}
+      {ai?.explanation && (
+        <div className="ai-note">
+          <span className="faint small-text row" style={{ gap: 6 }}><Icon name="sparkle" size={14} /> {t("docs.aiNote")}</span>
+          <p style={{ margin: "4px 0 0" }}>{ai.explanation}</p>
+          {ai.suggestions && ai.suggestions.length > 0 && <ul>{ai.suggestions.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+        </div>
+      )}
+      {doc.rows && doc.rows.length > 0 && (
+        <details>
+          <summary className="small-text">{t("docs.rowsRead", { count: doc.rows.length })}</summary>
+          <div className="rows-read">
+            {doc.rows.slice(0, 200).map(([day, amount, text], i) => (
+              <div key={i} className="row between small-text"><span className="faint">{day}</span><span className="ellipsis" style={{ flex: 1, margin: "0 10px" }}>{text}</span><span className="num">{amount}</span></div>
+            ))}
+          </div>
+        </details>
+      )}
+      <div className="row wrap" style={{ gap: 8 }}>
+        {doc.kind === "statement" && (doc.rows?.length ?? 0) > 0 && (
+          <button className="btn small" disabled={!!busy} onClick={() => act("import", async () => { const r = await api.importDocument(doc.id, target || undefined); return r; })}>
+            {busy === "import" ? <Spinner /> : null} {t("docs.importAnyway")}</button>
+        )}
+        <button className="btn ghost small" disabled={!!busy} onClick={() => act("dismiss", () => api.dismissDocument(doc.id))}>{t("docs.dismiss")}</button>
+        <button className="btn ghost small" disabled={!!busy} onClick={() => act("again", () => api.reprocessDocument(doc.id))}>{busy === "again" ? <Spinner /> : null} {t("docs.reprocess")}</button>
+      </div>
     </div>
   );
 }

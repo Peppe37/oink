@@ -23,8 +23,9 @@ from oink.core.config import Settings, get_settings
 from oink.core.db import Database
 from oink.core.oidc import OIDC
 from oink.core.security import Vault, create_user, user_count
-from oink.services import jobs, updates
+from oink.services import documents, jobs, updates
 from oink.services.ai import AI
+from oink.services.stores import Stores
 
 STATIC = Path(
     os.environ.get("OINK_STATIC_DIR", Path(__file__).resolve().parents[3] / "frontend" / "dist")
@@ -77,6 +78,8 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     app.state.ai = AI(settings, ai_store(db.sessions, vault))
     app.state.vault = vault
     app.state.oidc = OIDC(settings)
+    app.state.stores = Stores.of(settings)
+    documents.configure(app.state.stores)
     app.include_router(api)
     app.include_router(planning_router)
     app.include_router(admin_router)

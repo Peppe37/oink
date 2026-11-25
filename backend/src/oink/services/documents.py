@@ -21,6 +21,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +30,40 @@ from sqlalchemy.orm import Session
 
 from oink.core.db import Account, Document, User
 from oink.services.ai import AI, AIError
-from oink.services.importer import ImportError_, parse_date, parse_statement, pdf_text
+from oink.services.importer import (
+    ImportError_,
+    Parsed,
+    Row,
+    find_ibans,
+    parse_csv,
+    parse_date,
+    parse_ofx,
+    parse_pdf_lines,
+    pdf_text,
+)
 from oink.services.statements import Outcome, apply, pick_account
+from oink.services.stores import Cache, StoreError, Stores
+from oink.services.verify import (
+    Verdict,
+    check_invoice,
+    check_payslip,
+    check_statement,
+    rows_from_tables,
+)
 
 log = logging.getLogger("oink.documents")
 
-KINDS = ("statement", "payslip", "contract", "invoice", "receipt", "tax", "insurance",
-         "investment", "other")  # fmt: skip
+KINDS = (
+    "statement",
+    "payslip",
+    "contract",
+    "invoice",
+    "receipt",
+    "tax",
+    "insurance",
+    "investment",
+    "other",
+)
 TEXT_TYPES = (".pdf", ".csv", ".tsv", ".txt", ".ofx", ".qfx", ".md", ".json", ".xml")
 IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 ACCEPTED = TEXT_TYPES + IMAGE_TYPES
@@ -46,25 +74,92 @@ OVERLAP = 180
 
 #: Keywords that file a document when there is no AI (any of the five languages).
 KEYWORDS: dict[str, tuple[str, ...]] = {
-    "payslip": ("busta paga", "cedolino", "netto in busta", "retribuzione", "payslip", "pay slip",
-                "net pay", "gehaltsabrechnung", "lohnabrechnung", "bulletin de paie",
-                "fiche de paie", "nómina", "imponibile previdenziale"),
-    "statement": ("estratto conto", "saldo iniziale", "saldo finale", "account statement",
-                  "opening balance", "closing balance", "kontoauszug", "relevé de compte",
-                  "extracto", "movimenti del periodo", "elenco movimenti"),
-    "contract": ("contratto", "condizioni generali", "agreement", "contract", "vertrag",
-                 "contrat", "recesso", "sottoscrizione", "clausola"),
-    "invoice": ("fattura", "invoice", "rechnung", "facture", "factura", "partita iva",
-                "imponibile", "iva ", "vat "),
+    "payslip": (
+        "busta paga",
+        "cedolino",
+        "netto in busta",
+        "retribuzione",
+        "payslip",
+        "pay slip",
+        "net pay",
+        "gehaltsabrechnung",
+        "lohnabrechnung",
+        "bulletin de paie",
+        "fiche de paie",
+        "nómina",
+        "imponibile previdenziale",
+    ),
+    "statement": (
+        "estratto conto",
+        "saldo iniziale",
+        "saldo finale",
+        "account statement",
+        "opening balance",
+        "closing balance",
+        "kontoauszug",
+        "relevé de compte",
+        "extracto",
+        "movimenti del periodo",
+        "elenco movimenti",
+    ),
+    "contract": (
+        "contratto",
+        "condizioni generali",
+        "agreement",
+        "contract",
+        "vertrag",
+        "contrat",
+        "recesso",
+        "sottoscrizione",
+        "clausola",
+    ),
+    "invoice": (
+        "fattura",
+        "invoice",
+        "rechnung",
+        "facture",
+        "factura",
+        "partita iva",
+        "imponibile",
+        "iva ",
+        "vat ",
+    ),
     "receipt": ("scontrino", "ricevuta", "receipt", "quittung", "reçu", "recibo"),
-    "tax": ("730", "modello unico", "agenzia delle entrate", "f24", "certificazione unica",
-            "tax return", "steuererklärung", "impôt", "declaración de la renta", "irpef"),
-    "insurance": ("polizza", "assicurazione", "insurance", "versicherung", "assurance",
-                  "seguro", "premio annuo"),
-    "investment": ("rendiconto titoli", "dossier titoli", "portafoglio", "isin", "depot",
-                   "portfolio", "contract note", "eseguito", "piano di accumulo",
-                   "savings plan", "sparplan"),
-}  # fmt: skip
+    "tax": (
+        "730",
+        "modello unico",
+        "agenzia delle entrate",
+        "f24",
+        "certificazione unica",
+        "tax return",
+        "steuererklärung",
+        "impôt",
+        "declaración de la renta",
+        "irpef",
+    ),
+    "insurance": (
+        "polizza",
+        "assicurazione",
+        "insurance",
+        "versicherung",
+        "assurance",
+        "seguro",
+        "premio annuo",
+    ),
+    "investment": (
+        "rendiconto titoli",
+        "dossier titoli",
+        "portafoglio",
+        "isin",
+        "depot",
+        "portfolio",
+        "contract note",
+        "eseguito",
+        "piano di accumulo",
+        "savings plan",
+        "sparplan",
+    ),
+}
 STOPWORDS = set(
     [
         "il",
@@ -173,6 +268,18 @@ STOPWORDS = set(
         "mi",
     ]
 )
+
+
+_stores: Stores | None = None  # set once at startup (`configure`): engine, vectors, graph, cache
+
+
+def configure(stores: Stores | None) -> None:
+    global _stores
+    _stores = stores
+
+
+def stores_in_use(stores: Stores | None = None) -> Stores | None:
+    return stores or _stores
 
 
 class DocumentError(ValueError):
@@ -343,14 +450,83 @@ def search(
     return hits
 
 
+async def find(
+    db: Session,
+    user: User,
+    question: str,
+    limit: int = 8,
+    kind: str | None = None,
+    stores: Stores | None = None,
+) -> list[dict[str, Any]]:
+    """Hybrid when the engine and Qdrant are there: BGE-M3 dense (meaning) + sparse (exact
+    words and numbers) from Qdrant, SQLite full-text, and documents the graph links to
+    names in the question, fused by reciprocal rank. Full-text alone otherwise."""
+    fts = search(db, user, question, limit * 2, kind)
+    stores = stores_in_use(stores)
+    if stores is None or not stores.hybrid:
+        return fts[:limit]
+    try:
+        dense, sparse = (await embed(stores, [question]))[0]
+        semantic = await stores.vectors.search(user.id, dense, sparse, limit * 2, kind)
+    except StoreError as exc:
+        log.warning("hybrid search failed, full-text only: %s", exc)
+        return fts[:limit]
+    words = [w for w in re.findall(r"[\w]+", question.lower()) if len(w) > 3 and w not in STOPWORDS]
+    linked = set(await stores.graph.related(user.id, words)) if stores.graph.enabled else set()
+    score: dict[tuple[int, int], float] = {}
+    by_key: dict[tuple[int, int], dict[str, Any]] = {}
+    for ranking in (semantic, fts):
+        for rank, hit in enumerate(ranking):
+            key = (int(hit["document_id"]), int(hit.get("idx", hit.get("chunk", 0))))
+            score[key] = score.get(key, 0) + 1 / (60 + rank)
+            by_key.setdefault(key, hit)
+    for key in score:
+        if key[0] in linked:
+            score[key] += 1 / 60
+    titles = {
+        d.id: d
+        for d in db.scalars(
+            select(Document).where(
+                Document.id.in_({k[0] for k in score}), Document.user_id == user.id
+            )
+        )
+    }
+    out = []
+    for key in sorted(score, key=lambda k: -score[k]):
+        doc = titles.get(key[0])
+        if doc is None:
+            continue
+        hit = by_key[key]
+        text_ = str(hit.get("text") or "")
+        out.append(
+            {
+                "document_id": doc.id,
+                "title": doc.title,
+                "kind": doc.kind,
+                "date": doc.doc_date.isoformat() if doc.doc_date else None,
+                "chunk": key[1],
+                "snippet": hit.get("snippet") or (text_[:220] + ("…" if len(text_) > 220 else "")),
+                "text": text_,
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def ask(
-    db: Session, user: User, question: str, ai: AI, history: list[dict[str, str]] | None = None
+    db: Session,
+    user: User,
+    question: str,
+    ai: AI,
+    history: list[dict[str, str]] | None = None,
+    stores: Stores | None = None,
 ) -> dict[str, Any]:
     """Answer from the user's documents, with the passages used as sources."""
-    hits = search(db, user, question, limit=8)
+    hits = await find(db, user, question, 8, None, stores)
     if not hits and history:  # a follow-up («and in October?») borrows the earlier question
         last = next((h["content"] for h in reversed(history) if h.get("role") == "user"), "")
-        hits = search(db, user, f"{last} {question}", limit=8)
+        hits = await find(db, user, f"{last} {question}", 8, None, stores)
     sources = [
         {
             "n": i + 1,
@@ -393,6 +569,48 @@ def _apply_description(doc: Document, data: dict[str, Any]) -> None:
         }
 
 
+@dataclass
+class Extraction:
+    text: str
+    tables: list[dict[str, Any]]
+    by_engine: bool
+
+
+async def read_file(filename: str, raw: bytes, ai: AI, stores: Stores | None) -> Extraction:
+    """Docling when the engine is there (layout, tables, OCR of scans and photos),
+    the built-in readers otherwise. Cached by content, so a document is read once."""
+    name = filename.lower()
+    if stores is not None and stores.engine.enabled and name.endswith((".pdf", *IMAGE_TYPES)):
+        key = Cache.key_of("extract", hashlib.sha256(raw).hexdigest())
+        cached = await stores.cache.get("extract", key)
+        try:
+            data = cached or await stores.engine.extract(filename, raw)
+        except StoreError as exc:
+            log.warning("engine extract failed (%s): built-in reader", exc)
+        else:
+            if cached is None:
+                await stores.cache.set("extract", key, data)
+            body = str(data.get("markdown") or data.get("text") or "")
+            if body.strip() or not name.endswith(".pdf"):
+                return Extraction(body, list(data.get("tables") or []), True)
+    return Extraction(await extract_text(filename, raw, ai), [], False)
+
+
+def statement_rows(doc: Document, raw: bytes, extraction: Extraction) -> tuple[list[Row], bool]:
+    """Movements read by rules: the bank's export as it is, or the statement's tables."""
+    name = doc.filename.lower()
+    with contextlib.suppress(ImportError_):
+        if name.endswith((".ofx", ".qfx")) or raw.lstrip()[:9].upper().startswith(b"OFXHEADER"):
+            return parse_ofx(raw), True
+        if name.endswith((".csv", ".tsv", ".txt")):
+            return parse_csv(raw), True
+    if extraction.tables:
+        rows = rows_from_tables(extraction.tables)
+        if rows:
+            return rows, False
+    return parse_pdf_lines(extraction.text).rows, False
+
+
 async def store(
     db: Session,
     user: User,
@@ -405,8 +623,11 @@ async def store(
     account_id: int | None = None,
     import_statement: bool = True,
     source: str = "upload",
+    stores: Stores | None = None,
+    later: bool = False,
 ) -> Stored:
-    """File a document (once: the same bytes twice give the first copy back)."""
+    """File a document (once: the same bytes twice give the first copy back). With
+    `later` the file is saved and `status` is «processing»: call `process` afterwards."""
     filename = Path(filename or "document").name[:255]
     if len(raw) > MAX_FILE:
         raise DocumentError("file_too_big")
@@ -416,40 +637,188 @@ async def store(
         raise DocumentError("format_unsupported")
     if kind is not None and kind not in KINDS:
         raise DocumentError("kind_unknown")
+    if account_id is not None:
+        _own_account(db, user, account_id)
     digest = hashlib.sha256(raw).hexdigest()
     same = db.scalar(select(Document).where(Document.user_id == user.id, Document.sha256 == digest))
     if same is not None:
         return Stored(same, duplicate=True)
-
-    body = await extract_text(filename, raw, ai)
     doc = Document(
-        user_id=user.id, filename=filename, size=len(raw), sha256=digest, stored="",
+        user_id=user.id,
+        filename=filename,
+        size=len(raw),
+        sha256=digest,
+        stored="",
         mime=mimetypes.guess_type(filename)[0] or "application/octet-stream",
-        text=body, title=title_from(filename), kind=kind or guess_kind(filename, body),
-        doc_date=guess_date(body), source=source, facts={},
-    )  # fmt: skip
-    if body.strip() and ai.can_read_text:
-        try:
-            _apply_description(doc, await ai.describe_document(body, filename))
-        except AIError as exc:
-            log.info("document description failed: %s", exc)
-        if kind:
-            doc.kind = kind  # the user's choice wins over the AI's
+        text="",
+        title=title_from(filename),
+        kind=kind or "other",
+        source=source,
+        facts={},
+        status="processing",
+        review={"wanted_kind": kind, "account_id": account_id, "import": import_statement},
+    )
     db.add(doc)
     db.flush()
     target = folder / str(user.id) / f"{doc.id}{Path(filename).suffix.lower()}"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(raw)
     doc.stored = str(target.relative_to(folder))
+    db.commit()
+    if later:
+        return Stored(doc)
+    outcome = await process(db, user, doc, raw, ai, stores_in_use(stores))
+    return Stored(doc, outcome=outcome)
 
-    outcome = None
-    if import_statement and doc.kind == "statement" and filename.lower().endswith(STATEMENT_TYPES):
-        outcome = await import_into(db, user, doc, raw, ai, account_id)
+
+async def process(
+    db: Session, user: User, doc: Document, raw: bytes, ai: AI, stores: Stores | None
+) -> Outcome | None:
+    """Read, file, check by rules, import what adds up, index. Never raises for a bad file:
+    the document ends «ready», «review» (with what to look at) or «error»."""
+    wanted = dict(doc.review or {})
+    kind, account_id = wanted.get("wanted_kind"), wanted.get("account_id")
+    try:
+        extraction = await read_file(doc.filename, raw, ai, stores)
+    except DocumentError as exc:
+        doc.status, doc.review = "error", {"error": exc.code}
+        db.commit()
+        return None
+    body = extraction.text
+    doc.text = body
+    doc.kind = kind or guess_kind(doc.filename, body)
+    doc.doc_date = guess_date(body)
+    if body.strip() and ai.can_read_text:  # words for people: title, issuer, summary
+        try:
+            _apply_description(doc, await ai.describe_document(body, doc.filename))
+        except AIError as exc:
+            log.info("document description failed: %s", exc)
+        if kind:
+            doc.kind = kind  # the person's choice wins over the AI's
+    verdict: Verdict | None = None
+    outcome: Outcome | None = None
+    rows: list[Row] = []
+    if doc.kind == "statement":
+        rows, structured = statement_rows(doc, raw, extraction)
+        verdict = check_statement(rows, body, structured)
+    elif doc.kind == "payslip":
+        verdict = check_payslip(body)
+    elif doc.kind in ("invoice", "receipt"):
+        verdict = check_invoice(body)
+    review: dict[str, Any] = {"engine": extraction.by_engine}
+    if verdict is not None:
+        doc.facts = {**(doc.facts or {}), **verdict.facts}  # numbers by rules win over the AI's
+        review.update(verdict.as_dict())
+    if rows:
+        review["rows"] = [
+            [r.day.isoformat(), str(r.amount), r.description, r.counterparty] for r in rows
+        ]
+        review["ibans"] = find_ibans(body)
+    doc.review = review
+    doc.status = "review" if verdict is not None and verdict.status == "review" else "ready"
+    if doc.kind == "statement" and rows and wanted.get("import", True) and doc.status == "ready":
+        outcome = import_into(db, user, doc, account_id)
     elif account_id is not None:
-        doc.account_id = _own_account(db, user, account_id).id
+        doc.account_id = account_id
+    if doc.status == "review" and ai.can_read_text and verdict is not None:
+        await _ai_review(doc, verdict, ai, user)
     index(db, doc)
     db.commit()
-    return Stored(doc, outcome=outcome)
+    if stores is not None:
+        await index_stores(db, doc, stores)
+    return outcome
+
+
+async def process_later(sessions: Any, doc_id: int, ai: AI, folder: Path) -> None:
+    """The slow part of an upload (reading with Docling, embeddings), after the reply."""
+    with sessions() as db:
+        doc = db.get(Document, doc_id)
+        user = db.get(User, doc.user_id) if doc else None
+        if doc is None or user is None:
+            return
+        try:
+            await process(db, user, doc, path_of(folder, doc).read_bytes(), ai, stores_in_use())
+        except Exception:  # never leave a document «processing» forever
+            log.exception("processing document %s failed", doc_id)
+            db.rollback()
+            doc = db.get(Document, doc_id)
+            if doc is not None:
+                doc.status, doc.review = "error", {"error": "processing_failed"}
+                db.commit()
+
+
+async def _ai_review(doc: Document, verdict: Verdict, ai: AI, user: User) -> None:
+    """The AI looks at what didn't add up and suggests where the mistake is. It changes
+    nothing: its note is shown next to the document for the person to decide."""
+    rows = (doc.review or {}).get("rows", [])
+    try:
+        note = await ai.review_document(
+            doc.kind,
+            [c.__dict__ for c in verdict.issues],
+            rows[:120],
+            doc.text[:12000],
+            user.language or "en",
+        )
+    except AIError as exc:
+        log.info("AI review failed: %s", exc)
+        return
+    doc.review = {**(doc.review or {}), "ai": note}
+
+
+async def index_stores(db: Session, doc: Document, stores: Stores) -> None:
+    """Chunks into Qdrant (dense + sparse BGE-M3 vectors), links into the graph."""
+    if stores.hybrid:
+        pieces = chunks(doc.text) or [doc.title]
+        try:
+            vectors = await embed(stores, pieces)
+            await stores.vectors.delete_document(doc.id)
+            date_text = doc.doc_date.isoformat() if doc.doc_date else None
+            await stores.vectors.upsert(
+                [
+                    {
+                        "id": doc.id * 100_000 + i,
+                        "vector": {"dense": dense, "sparse": sparse},
+                        "payload": {
+                            "user_id": doc.user_id,
+                            "document_id": doc.id,
+                            "idx": i,
+                            "text": piece,
+                            "title": doc.title,
+                            "kind": doc.kind,
+                            "date": date_text,
+                        },
+                    }
+                    for i, (piece, (dense, sparse)) in enumerate(zip(pieces, vectors, strict=True))
+                ]
+            )
+        except StoreError as exc:
+            log.warning("vector index failed for document %s: %s", doc.id, exc)
+    if stores.graph.enabled:
+        account = db.get(Account, doc.account_id) if doc.account_id else None
+        await stores.graph.file_document(
+            doc.user_id,
+            to_dict(doc),
+            {"id": account.id, "name": account.name, "institution": account.institution}
+            if account
+            else None,
+        )
+
+
+async def embed(stores: Stores, texts: list[str]) -> list[tuple[list[float], dict[str, list[Any]]]]:
+    """BGE-M3 vectors, cached by text (a chunk or a question is embedded once)."""
+    keys = [Cache.key_of("bge-m3", t) for t in texts]
+    found: dict[int, Any] = {}
+    for i, key in enumerate(keys):
+        hit = await stores.cache.get("emb", key)
+        if hit is not None:
+            found[i] = (hit[0], hit[1])
+    missing = [i for i in range(len(texts)) if i not in found]
+    for start in range(0, len(missing), 16):
+        batch = missing[start : start + 16]
+        for i, vec in zip(batch, await stores.engine.embed([texts[i] for i in batch]), strict=True):
+            found[i] = vec
+            await stores.cache.set("emb", keys[i], [vec[0], vec[1]], ttl=90 * 86400)
+    return [found[i] for i in range(len(texts))]
 
 
 def _own_account(db: Session, user: User, account_id: int) -> Account:
@@ -459,21 +828,29 @@ def _own_account(db: Session, user: User, account_id: int) -> Account:
     return account
 
 
-async def import_into(
-    db: Session, user: User, doc: Document, raw: bytes, ai: AI, account_id: int | None
-) -> Outcome | None:
-    """Movements of a statement into its account; the reason is kept when it can't be done."""
-    try:
-        parsed = await parse_statement(doc.filename, raw, ai)
-    except ImportError_ as exc:
-        doc.import_note = exc.code
+def parsed_of(doc: Document) -> Parsed:
+    review = doc.review or {}
+    rows = [Row(date.fromisoformat(d), Decimal(a), t, c) for d, a, t, c in review.get("rows", [])]
+    closing = (doc.facts or {}).get("closing_balance")
+    return Parsed(
+        rows,
+        Decimal(str(closing)) if closing is not None else None,
+        ibans=list(review.get("ibans", [])),
+    )
+
+
+def import_into(db: Session, user: User, doc: Document, account_id: int | None) -> Outcome | None:
+    """The movements read from a statement into its account; the reason is kept when it
+    can't be done (an unknown account is proposed, filled in from the statement)."""
+    parsed = parsed_of(doc)
+    if not parsed.rows:
+        doc.import_note = "nothing_found"
         return None
     try:
         account = pick_account(db, user, parsed, account_id)
     except ImportError_ as exc:
         doc.import_note = exc.code
         if exc.code == "account_not_recognised":
-            # an account Oink doesn't know yet: propose it, filled in from the statement
             doc.facts = {**(doc.facts or {}), "proposed_account": propose_account(doc, parsed)}
         return None
     outcome = apply(db, account, parsed)
@@ -563,7 +940,13 @@ def path_of(folder: Path, doc: Document) -> Path:
     return folder / doc.stored
 
 
-def remove(db: Session, folder: Path, doc: Document) -> None:
+async def remove(db: Session, folder: Path, doc: Document, stores: Stores | None = None) -> None:
+    stores = stores_in_use(stores)
+    if stores is not None:
+        if stores.vectors.enabled:
+            with contextlib.suppress(StoreError):
+                await stores.vectors.delete_document(doc.id)
+        await stores.graph.forget_document(doc.id)
     unindex(db, doc.id)
     with contextlib.suppress(FileNotFoundError):
         path_of(folder, doc).unlink()
@@ -573,13 +956,31 @@ def remove(db: Session, folder: Path, doc: Document) -> None:
 
 def to_dict(doc: Document, with_text: bool = False) -> dict[str, Any]:
     out = {
-        "id": doc.id, "kind": doc.kind, "title": doc.title, "filename": doc.filename,
-        "mime": doc.mime, "size": doc.size, "summary": doc.summary, "issuer": doc.issuer,
-        "date": doc.doc_date.isoformat() if doc.doc_date else None, "facts": doc.facts or {},
-        "account_id": doc.account_id, "imported": doc.imported, "import_note": doc.import_note,
-        "source": doc.source, "created": doc.created.isoformat() if doc.created else None,
+        "id": doc.id,
+        "kind": doc.kind,
+        "title": doc.title,
+        "filename": doc.filename,
+        "mime": doc.mime,
+        "size": doc.size,
+        "summary": doc.summary,
+        "issuer": doc.issuer,
+        "date": doc.doc_date.isoformat() if doc.doc_date else None,
+        "facts": doc.facts or {},
+        "account_id": doc.account_id,
+        "imported": doc.imported,
+        "import_note": doc.import_note,
+        "source": doc.source,
+        "created": doc.created.isoformat() if doc.created else None,
         "has_text": bool(doc.text.strip()),
-    }  # fmt: skip
+        "status": doc.status,
+    }
+    review = dict(doc.review or {})
+    rows = review.pop("rows", [])
+    for private in ("ibans", "wanted_kind", "account_id", "import"):
+        review.pop(private, None)
+    review["movements"] = len(rows)
+    out["review"] = review
     if with_text:
         out["text"] = doc.text
+        out["rows"] = rows
     return out

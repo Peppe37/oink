@@ -220,3 +220,23 @@ class AI:
             f"Passages:\n{sources}\n\nQuestion: {question}",
             history=history,
         )
+
+    async def review_document(
+        self, kind: str, issues: list[dict[str, Any]], rows: list[list[str]], text: str,
+        language: str,
+    ) -> dict[str, Any]:  # fmt: skip
+        """Where a document's numbers don't add up and what to check. It never changes
+        anything: Oink shows the note, the person decides."""
+        data = await self.json(
+            f"You check personal financial documents. Write in {LANG.get(language, 'English')}. "
+            "Oink read the numbers by rules and a check failed or could not be done. Compare "
+            "the checks, the movements Oink read and the document text, and say what is most "
+            "likely wrong (a missed or doubled line, a wrong sign, a misread amount, a balance "
+            'not found). Reply ONLY with JSON {"explanation": "two or three sentences", '
+            '"suggestions": ["concrete things to check or fix, with dates and amounts"], '
+            '"confidence": "low|medium|high"}. Never invent numbers that are not in the text.',
+            json.dumps({"kind": kind, "checks": issues, "movements": rows}, ensure_ascii=False)
+            + "\n\nDocument text:\n"
+            + text,
+        )
+        return data if isinstance(data, dict) else {}
