@@ -48,6 +48,10 @@ export type PlanItem = {
   account_id?: number | null; day?: number | null; end?: string | null;
   position?: { executions: number; invested: string; units: string | null; last: string | null } | null;
 };
+export type PlanProposal = {
+  kind: "ready" | "pick"; isin?: string; symbol?: string; name?: string; amount: string; currency: string; day: number;
+  account_id: number; account: string; start?: string; purchases?: number; months?: number;
+};
 export type PlanSuggestion = { account_id: number; account: string; amount: string; currency: string; day: number; months: number; per_month: number; last: string };
 export type SearchHit = { symbol: string; name: string; kind: string; exchange: string };
 export type Band = { year: number; p5: number; p25: number; p50: number; p75: number; p95: number };
@@ -74,7 +78,7 @@ export type Doc = {
 };
 export type DocCheck = { name: string; ok: boolean | null; detail: Record<string, string> };
 export type DocReview = {
-  checks?: DocCheck[]; movements: number; engine?: boolean; confirmed?: boolean; dismissed?: boolean; error?: string;
+  checks?: DocCheck[]; movements: number; account_warning?: { code: string; found?: string; suggested?: number | null } | null; engine?: boolean; confirmed?: boolean; dismissed?: boolean; error?: string;
   ai?: { explanation?: string; suggestions?: string[]; confidence?: string };
 };
 export type DocUpload = Doc & { duplicate: boolean; import: ImportResult | null };
@@ -194,6 +198,8 @@ export const api = {
   updatePlan: (id: number, body: Omit<PlanItem, "id" | "position">) => call<PlanItem>(`/plans/${id}`, { method: "PATCH", body: json(body) }),
   markPurchase: (txId: number, planId: number) => call(`/transactions/${txId}/plan`, { method: "POST", body: json({ plan_id: planId }) }),
   unmarkPurchase: (txId: number) => call(`/transactions/${txId}/plan`, { method: "DELETE" }),
+  planProposals: () => call<PlanProposal[]>("/plans/proposals"),
+  moveDocument: (id: number, accountId: number) => call<Doc>(`/documents/${id}/move`, { method: "POST", body: json({ account_id: accountId }) }),
   planSuggestions: () => call<PlanSuggestion[]>("/plans/suggestions"),
   deletePlan: (id: number) => call(`/plans/${id}`, { method: "DELETE" }),
   search: (q: string) => call<SearchHit[]>(`/markets/search?${query({ q })}`),

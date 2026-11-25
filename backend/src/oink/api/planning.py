@@ -21,6 +21,7 @@ from oink.services.plans import (
     link_purchase,
     match_executions,
     plan_positions,
+    proposals,
     suggestions,
     unlink_purchase,
 )
@@ -251,6 +252,14 @@ def unmark_purchase(
 ) -> dict[str, bool]:
     unlink_purchase(db, _own_tx(db, who, tx_id))
     return {"ok": True}
+
+
+@router.get("/plans/proposals")
+async def plan_proposals(
+    who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """Plans Oink found by itself in the movements and statements, ready to add."""
+    return await proposals(db, who.user)
 
 
 @router.get("/plans/suggestions")

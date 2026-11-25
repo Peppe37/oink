@@ -15,7 +15,7 @@ from __future__ import annotations
 import calendar
 import logging
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -262,3 +262,82 @@ def unlink_purchase(db: Session, tx: Transaction) -> None:
     if tx.category_by == "plan":
         tx.category, tx.category_by = "", "user"  # not a purchase: don't match it again
     db.commit()
+
+
+_SYMBOLS: dict[str, dict[str, str] | None] = {}  # ISIN → market symbol, found once
+
+
+async def _symbol_for(isin: str) -> dict[str, str] | None:
+    if isin not in _SYMBOLS:
+        from oink.services.markets import search
+
+        try:
+            hits = await search(isin)
+        except MarketError:
+            return None
+        # prefer a European listing in euro when there is one (what an Italian buys)
+        euro = [h for h in hits if h["symbol"].endswith((".DE", ".MI", ".AS", ".PA", ".F", ".SG"))]
+        pick = euro or hits
+        _SYMBOLS[isin] = pick[0] if pick else None
+    return _SYMBOLS[isin]
+
+
+async def proposals(db: Session, user: User, today: date | None = None) -> list[dict[str, Any]]:
+    """Plans Oink found by itself, ready to add with one tap:
+
+    - «ready»: purchases with the security's ISIN in their wording (a broker's statement),
+      repeating with the same amount: security, amount, day, account and start are known;
+    - «pick»: purchases on a broker's account without any wording (Trade Republic through
+      the bank link): everything is known but the security."""
+    today = today or date.today()
+    since = today - timedelta(days=400)
+    known = {
+        (p.symbol.upper(), p.account_id)
+        for p in db.scalars(select(Plan).where(Plan.user_id == user.id))
+    }
+    accounts = {a.id: a for a in db.scalars(select(Account).where(Account.user_id == user.id))}
+    by_isin: dict[tuple[str, int], list[Transaction]] = defaultdict(list)
+    for t in db.scalars(
+        select(Transaction).where(
+            Transaction.user_id == user.id,
+            Transaction.amount < 0,
+            Transaction.day >= since,
+            Transaction.plan_id.is_(None),
+        )
+    ):
+        found = ISIN.search(t.description or "")
+        if found:
+            by_isin[(found.group(0), t.account_id)].append(t)
+    out: list[dict[str, Any]] = []
+    for (isin, account_id), txs in by_isin.items():
+        months = {(t.day.year, t.day.month) for t in txs}
+        text = " ".join(t.description.lower() for t in txs)
+        planned = any(w in text for w in ("sparplan", "savings plan", "piano", "plan"))
+        if len(months) < 2 and not planned:
+            continue  # one purchase only, not worded as a plan: a trade, not a plan
+        amounts = Counter(t.amount for t in txs)
+        amount = amounts.most_common(1)[0][0]
+        hit = await _symbol_for(isin)
+        symbol = hit["symbol"] if hit else isin
+        if (symbol.upper(), account_id) in known:
+            continue
+        tail = txs[-1].description.split(isin, 1)[-1]
+        name = (hit or {}).get("name") or re.sub(r"[,;].*$", "", tail).strip(" -:") or isin
+        out.append({
+            "kind": "ready", "isin": isin, "symbol": symbol, "name": name[:160],
+            "amount": str(-from_minor(amount, txs[0].currency)), "currency": txs[0].currency,
+            "day": round(sum(t.day.day for t in txs) / len(txs)), "account_id": account_id,
+            "account": accounts[account_id].name if account_id in accounts else "",
+            "start": min(t.day for t in txs).isoformat(), "purchases": len(txs),
+        })  # fmt: skip
+    for sg in suggestions(db, user, today):
+        covered = sum(
+            1
+            for p in out
+            if p["account_id"] == sg["account_id"]
+            and p["amount"] == sg["amount"]
+            and abs(p["day"] - sg["day"]) <= 3
+        )
+        for _ in range(max(0, sg["per_month"] - covered)):
+            out.append({"kind": "pick", **sg})
+    return out

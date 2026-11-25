@@ -16,6 +16,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   const [data, setData] = useState<Overview | null>(null);
   const [moved, setMoved] = useState<{ institution: string; currency: string; count: number; total: string }[]>([]);
   useEffect(() => { api.untrackedTransfers().then(setMoved).catch(() => undefined); }, []);
+  const [plansFound, setPlansFound] = useState(0);
+  useEffect(() => { api.planProposals().then((p) => setPlansFound(p.length)).catch(() => undefined); }, []);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
@@ -59,6 +61,15 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
           <Glass className="banner" variant="tight">
             <span className="row" style={{ gap: 10 }}><Icon name="inbox" /> {t("home.requests", { count: data.open_requests })}</span>
             <Link to="/accounts" className="btn ghost small">{t("home.upload")}</Link>
+          </Glass>
+        </motion.div>
+      )}
+
+      {plansFound > 0 && (
+        <motion.div variants={rise}>
+          <Glass className="banner" variant="tight">
+            <span className="row" style={{ gap: 10 }}><Icon name="investments" /> {t("invest.foundHome", { count: plansFound })}</span>
+            <Link to="/invest" className="btn ghost small">{t("invest.review")}</Link>
           </Glass>
         </motion.div>
       )}

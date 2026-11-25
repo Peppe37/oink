@@ -4,7 +4,7 @@
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, type Account, type Holdings, type PlanItem, type PlanSuggestion, type SearchHit, type Simulation } from "../api";
+import { api, type Account, type Holdings, type PlanItem, type PlanProposal, type SearchHit, type Simulation } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { FanChart, GrowthChart } from "../ui/charts";
@@ -24,7 +24,7 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   const [holdings, setHoldings] = useState<Holdings | null>(null);
   const [plans, setPlans] = useState<PlanItem[]>([]);
   const [adding, setAdding] = useState<"holding" | "plan" | null>(null);
-  const [suggested, setSuggested] = useState<PlanSuggestion[]>([]);
+  const [proposed, setProposed] = useState<PlanProposal[]>([]);
   const [preset, setPreset] = useState<Partial<PlanItem> | null>(null);
   const [editing, setEditing] = useState<PlanItem | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -32,9 +32,13 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   const load = useCallback(() => {
     api.holdings().then(setHoldings).catch((e) => notify(errorText(e)));
     api.plans().then(setPlans).catch(() => undefined);
-    api.planSuggestions().then(setSuggested).catch(() => undefined);
+    api.planProposals().then(setProposed).catch(() => undefined);
     api.accounts().then(setAccounts).catch(() => undefined);
   }, [notify, errorText]);
+  const accept = (p: PlanProposal) => api.addPlan({
+    symbol: p.symbol ?? "", name: p.name ?? "", amount: p.amount, currency: p.currency, frequency: "monthly",
+    start: p.start ?? new Date().toISOString().slice(0, 10), active: true, account_id: p.account_id, day: p.day, end: null,
+  });
   const openPlan = (p: Partial<PlanItem> | null, edit: PlanItem | null = null) => { setPreset(p); setEditing(edit); setAdding("plan"); };
   const [params, setParams] = useSearchParams();
   useEffect(() => {
@@ -83,13 +87,24 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
         <motion.div variants={rise} className="span-5">
           <Glass className="card">
             <div className="row between"><h3>{t("invest.plans")}</h3><button className="btn ghost small" onClick={() => openPlan(null)}><Icon name="plus" size={16} /> {t("common.add")}</button></div>
-            {suggested.map((sg) => (
-              <div key={`${sg.account_id}-${sg.amount}-${sg.day}`} className="note" style={{ marginBottom: 10 }}>
-                <Icon name="sparkle" size={18} />
-                <span style={{ flex: 1 }}>{t("invest.planSuggested", { count: sg.per_month, amount: fmt.money(sg.amount, sg.currency), day: sg.day, account: sg.account })}</span>
-                <button className="btn ghost small" onClick={() => openPlan({ amount: sg.amount, day: sg.day, account_id: sg.account_id })}>{t("invest.planSetUp")}</button>
+            {proposed.length > 0 && (
+              <div className="found-plans">
+                <div className="row between"><span className="row" style={{ gap: 8 }}><Icon name="sparkle" size={18} /> <strong>{t("invest.found", { count: proposed.length })}</strong></span>
+                  {proposed.some((p) => p.kind === "ready") && <button className="btn small" onClick={async () => {
+                    for (const p of proposed.filter((x) => x.kind === "ready")) await accept(p);
+                    load(); notify(t("invest.added"));
+                  }}>{t("invest.addAll")}</button>}</div>
+                {proposed.map((p, i) => (
+                  <div key={i} className="row between found-plan">
+                    <span className="row-text"><span className="row-title">{p.kind === "ready" ? p.name : t("invest.unknownSecurity")}</span>
+                      <span className="row-detail">{fmt.money(p.amount, p.currency)} · {t("invest.onDay", { day: p.day })} · {p.account}{p.purchases ? ` · ${t("invest.purchasesSeen", { count: p.purchases })}` : ""}</span></span>
+                    {p.kind === "ready"
+                      ? <button className="btn ghost small" onClick={async () => { await accept(p); load(); notify(t("invest.added")); }}>{t("common.add")}</button>
+                      : <button className="btn ghost small" onClick={() => openPlan({ amount: p.amount, day: p.day, account_id: p.account_id })}>{t("invest.pickSecurity")}</button>}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
             {plans.length === 0 ? <p className="muted">{t("invest.plansEmpty")}</p> : (
               <div className="list">
                 {plans.map((p) => (

@@ -235,3 +235,40 @@ def test_a_hand_made_account_fills_from_its_statement(owner: TestClient) -> None
     assert (
         learnt["iban"] == "IT71X0306901600000000012345"
     )  # next month the statement finds it alone
+
+
+def test_a_statement_finds_its_bank_and_a_doubtful_account_is_flagged_and_moved(
+    owner: TestClient,
+) -> None:
+    intesa = owner.post(
+        "/api/accounts", json={"name": "Conto Intesa", "institution": "Intesa Sanpaolo"}
+    ).json()
+    revolut = owner.post(
+        "/api/accounts", json={"name": "Revolut", "institution": "Revolut", "balance": "10"}
+    ).json()
+    body = "Intesa Sanpaolo - Estratto conto\nIBAN IT71X0306901600000000012345\nData;Descrizione;Importo\n02/11/2026;Versamento contanti;200,00\n"
+    guessed = _upload(
+        owner, "intesa.csv", body
+    ).json()  # no IBAN known yet: same bank → that account
+    assert (
+        guessed["account_id"] == intesa["id"]
+        and guessed["review"]["account_warning"]["code"] == "account_guessed"
+    )
+    other = body.replace("200,00", "50,00").replace("02/11", "05/11")
+    wrong = _upload(
+        owner, "intesa-2.csv", other, account_id=revolut["id"]
+    ).json()  # put in Revolut by mistake
+    warning = wrong["review"]["account_warning"]
+    assert (
+        wrong["account_id"] == revolut["id"]
+        and warning["code"] == "iban_other_account"
+        and warning["suggested"] == intesa["id"]
+    )
+    moved = owner.post(
+        f"/api/documents/{wrong['id']}/move", json={"account_id": intesa["id"]}
+    ).json()
+    assert moved["account_id"] == intesa["id"] and moved["review"]["account_warning"] is None
+    accounts = {a["id"]: a for a in owner.get("/api/accounts").json()}
+    assert accounts[revolut["id"]]["balance"] == "10.00"  # its balance is back to what it was
+    in_revolut = owner.get("/api/transactions", params={"account_id": revolut["id"]}).json()
+    assert in_revolut == []

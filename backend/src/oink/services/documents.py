@@ -28,7 +28,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from oink.core.db import Account, Document, User
+from oink.core.db import Account, Document, Transaction, User
 from oink.services.ai import AI, AIError
 from oink.services.importer import (
     ImportError_,
@@ -839,28 +839,113 @@ def parsed_of(doc: Document) -> Parsed:
     )
 
 
+def institution_of(doc: Document, parsed: Parsed) -> str:
+    """The bank a statement is from, by rules: the IBAN's bank code, then the names printed."""
+    return str(propose_account(doc, parsed).get("institution") or "")
+
+
+def _same_bank(a: str, b: str) -> bool:
+    a, b = a.lower().strip(), b.lower().strip()
+    return bool(a and b) and (a in b or b in a)
+
+
+def check_account(
+    db: Session, user: User, doc: Document, parsed: Parsed, account: Account
+) -> dict[str, Any] | None:
+    """Doubts about the account a statement went into: its IBAN is another account's, or
+    it is printed by another bank. Shown to the person, who can move it."""
+    accounts = list(
+        db.scalars(select(Account).where(Account.user_id == user.id, Account.archived.is_(False)))
+    )
+    for iban in parsed.ibans:
+        owner = next(
+            (a for a in accounts if a.iban and a.iban.replace(" ", "").upper() == iban), None
+        )
+        if owner is not None and owner.id != account.id:
+            return {"code": "iban_other_account", "suggested": owner.id, "found": iban}
+    if account.iban and parsed.ibans and account.iban.replace(" ", "").upper() not in parsed.ibans:
+        return {"code": "iban_differs", "found": parsed.ibans[0]}
+    bank = institution_of(doc, parsed)
+    if (
+        bank
+        and account.institution
+        and not _same_bank(bank, account.institution)
+        and not _same_bank(bank, account.name)
+    ):
+        suggested = next(
+            (a.id for a in accounts if _same_bank(bank, a.institution) or _same_bank(bank, a.name)),
+            None,
+        )
+        return {"code": "bank_differs", "found": bank, "suggested": suggested}
+    return None
+
+
 def import_into(db: Session, user: User, doc: Document, account_id: int | None) -> Outcome | None:
-    """The movements read from a statement into its account; the reason is kept when it
-    can't be done (an unknown account is proposed, filled in from the statement)."""
+    """The movements read from a statement into its account:
+
+    1. the account chosen by the person (checked: a doubt is kept on the document);
+    2. otherwise the account whose IBAN is printed on it;
+    3. otherwise the only account at the same bank (kept with a note: «is it right?»);
+    4. otherwise a new account is proposed, filled in from the statement."""
     parsed = parsed_of(doc)
     if not parsed.rows:
         doc.import_note = "nothing_found"
         return None
+    warning: dict[str, Any] | None = None
     try:
         account = pick_account(db, user, parsed, account_id)
     except ImportError_ as exc:
-        doc.import_note = exc.code
-        if exc.code == "account_not_recognised":
+        if exc.code != "account_not_recognised":
+            doc.import_note = exc.code
+            return None
+        bank = institution_of(doc, parsed)
+        same = [
+            a
+            for a in db.scalars(
+                select(Account).where(Account.user_id == user.id, Account.archived.is_(False))
+            )
+            if bank and (_same_bank(bank, a.institution) or _same_bank(bank, a.name))
+        ]
+        if len(same) != 1:
+            doc.import_note = exc.code
             doc.facts = {**(doc.facts or {}), "proposed_account": propose_account(doc, parsed)}
-        return None
-    outcome = apply(db, account, parsed)
+            return None
+        account = same[0]
+        warning = {"code": "account_guessed", "found": bank}
+    if account_id is not None:
+        warning = check_account(db, user, doc, parsed, account)
+    before = account.balance
+    outcome = apply(db, account, parsed, doc.id)
     facts = dict(doc.facts or {})
     facts.pop("proposed_account", None)
     doc.facts = facts
     doc.account_id, doc.imported, doc.import_note = account.id, outcome.added, ""
+    review = dict(doc.review or {})
+    review["account_warning"] = warning
+    review["balance_before"] = {"account_id": account.id, "value": before}
+    doc.review = review
     if outcome.month and doc.doc_date is None:
         doc.doc_date = date.fromisoformat(f"{outcome.month}-01")
+    db.commit()
     return outcome
+
+
+def move_import(db: Session, user: User, doc: Document, account_id: int) -> Outcome | None:
+    """The statement went into the wrong account: take its movements back out (and the
+    balance it set) and import it into the right one."""
+    target = _own_account(db, user, account_id)
+    review = dict(doc.review or {})
+    old = db.get(Account, doc.account_id) if doc.account_id else None
+    for tx in db.scalars(select(Transaction).where(Transaction.document_id == doc.id)):
+        db.delete(tx)
+    before = review.get("balance_before") or {}
+    if old is not None and old.source == "manual" and before.get("account_id") == old.id:
+        old.balance = before.get("value")
+    doc.account_id, doc.imported = None, None
+    review["account_warning"] = None
+    doc.review = review
+    db.commit()
+    return import_into(db, user, doc, target.id)
 
 
 #: Italian bank codes (ABI, in the IBAN) of the most common banks.
@@ -976,7 +1061,7 @@ def to_dict(doc: Document, with_text: bool = False) -> dict[str, Any]:
     }
     review = dict(doc.review or {})
     rows = review.pop("rows", [])
-    for private in ("ibans", "wanted_kind", "account_id", "import"):
+    for private in ("ibans", "wanted_kind", "account_id", "import", "balance_before"):
         review.pop(private, None)
     review["movements"] = len(rows)
     out["review"] = review

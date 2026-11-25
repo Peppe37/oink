@@ -140,3 +140,41 @@ def test_only_purchases_on_a_brokers_account_are_suggested_and_marking_one_teach
         plans_module.unlink_purchase(s, tx)
         match_executions(s, user, date(2026, 11, 20))
         assert s.get(Transaction, tx.id).plan_id is None  # «not a purchase»: it stays so
+
+
+async def test_a_brokers_statement_turns_into_ready_plans(db: Database, monkeypatch: Any) -> None:
+    uid, broker = _broker(db)
+    with db.sessions() as s:
+        user = s.get(User, uid)
+        acc = s.get(Account, broker)
+        # the statement says what the bank link didn't: the same purchases, with ISIN and name
+        add_movements(s, acc, [
+            NewMovement(date(2026, m, 16), -10000, f"Savings plan execution {isin} {name}, quantity 0.5")
+            for m in (9, 10, 11) for isin, name in (("US0378331005", "Apple"), ("US67066G1040", "NVIDIA"), ("IE00B5BMR087", "iShares Core S&P 500"))
+        ], "import")  # fmt: skip
+        assert (
+            s.query(Transaction).filter(Transaction.account_id == broker).count() == 10
+        )  # no duplicates
+        assert (
+            s.query(Transaction).filter(Transaction.description.like("%US0378331005%")).count() == 3
+        )  # enriched
+
+        async def search(query: str, client: Any = None) -> list[dict[str, str]]:
+            return [{"symbol": {"US0378331005": "APC.DE", "US67066G1040": "NVD.DE"}.get(query, "SXR8.DE"),
+                     "name": query, "kind": "stock", "exchange": "XETRA"}]  # fmt: skip
+
+        import oink.services.markets as markets
+
+        monkeypatch.setattr(markets, "search", search)
+        plans_module._SYMBOLS.clear()
+        found = await plans_module.proposals(s, user, date(2026, 11, 20))
+        ready = sorted(
+            (p["symbol"], p["amount"], p["day"], p["account_id"])
+            for p in found
+            if p["kind"] == "ready"
+        )
+        assert ready == [
+            ("APC.DE", "100", 16, broker),
+            ("NVD.DE", "100", 16, broker),
+            ("SXR8.DE", "100", 16, broker),
+        ]

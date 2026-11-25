@@ -291,6 +291,24 @@ async def delete_document(
     await docs.remove(db, _folder(request), _mine(db, who, doc_id))
 
 
+@router.post("/{doc_id}/move")
+def move_document(
+    doc_id: int, body: ImportIn, who: Caller = Depends(require("documents:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    """Move a statement's movements to another account (it went into the wrong one)."""
+    doc = _mine(db, who, doc_id)
+    if body.account_id is None:
+        raise HTTPException(422, "account_unknown")
+    try:
+        outcome = docs.move_import(db, who.user, doc, body.account_id)
+    except docs.DocumentError as exc:
+        raise _fail(exc) from exc
+    out = docs.to_dict(doc)
+    out["import"] = outcome.__dict__ if outcome else None
+    return out
+
+
 @router.post("/{doc_id}/reprocess")
 async def reprocess_document(
     doc_id: int,

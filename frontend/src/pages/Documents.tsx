@@ -33,6 +33,7 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [kind, setKind] = useState<DocKind | "">("");
   const [onlyReview, setOnlyReview] = useState(false);
+  const [target, setTargetAccount] = useState<number | "">("");
   const [toReview, setToReview] = useState(0);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Doc | null>(null);
@@ -54,7 +55,7 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
     for (const file of Array.from(files)) {
       setBusy(file.name);
       try {
-        const r = await api.uploadDocument(file);
+        const r = await api.uploadDocument(file, { accountId: target || undefined });
         if (r.status === "processing") notify(t("docs.reading", { name: file.name }));
         else if (r.import_note === "account_not_recognised" && r.facts.proposed_account) { setOpen(r); notify(t("docs.newAccountFound")); }
         else if (r.duplicate) notify(t("docs.duplicate", { title: r.title }));
@@ -111,6 +112,13 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
       </motion.div>
 
       <motion.div variants={rise}>
+        <div className="row wrap upload-target" style={{ gap: 8, marginBottom: 10 }}>
+          <span className="muted small-text">{t("docs.intoAccount")}</span>
+          <select className="field" style={{ flex: "0 1 260px" }} value={target} onChange={(e) => setTargetAccount(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">{t("docs.accountAuto")}</option>
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.institution && a.institution !== a.name ? ` (${a.institution})` : ""}</option>)}
+          </select>
+        </div>
         <div className={`drop ${over ? "over" : ""}`} onClick={() => input.current?.click()} role="button" tabIndex={0}>
           <Icon name="upload" size={22} />
           <strong>{t("docs.drop")}</strong>
@@ -258,6 +266,7 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
           <a className="btn ghost small" href={api.documentUrl(doc.id, true)}><Icon name="download" size={16} /> {t("docs.download")}</a>
           <button className="btn ghost small danger" onClick={remove}><Icon name="trash" size={16} /> {t("docs.delete")}</button>
         </div>
+        {doc.review.account_warning && <AccountWarning doc={doc} accounts={accounts} notify={notify} onChanged={onChanged} />}
         {doc.status === "review" && <ReviewCard doc={doc} accounts={accounts} target={target} notify={notify} onChanged={onChanged} />}
         {doc.status === "processing" && <p className="note"><Spinner /> {t("docs.status.processing")}</p>}
         {!doc.has_text && doc.status !== "processing" && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
@@ -389,6 +398,31 @@ function ReviewCard({ doc, accounts, target, notify, onChanged }: {
         )}
         <button className="btn ghost small" disabled={!!busy} onClick={() => act("dismiss", () => api.dismissDocument(doc.id))}>{t("docs.dismiss")}</button>
         <button className="btn ghost small" disabled={!!busy} onClick={() => act("again", () => api.reprocessDocument(doc.id))}>{busy === "again" ? <Spinner /> : null} {t("docs.reprocess")}</button>
+      </div>
+    </div>
+  );
+}
+
+/** «This statement looks like another account's»: say why, offer to move it. */
+function AccountWarning({ doc, accounts, notify, onChanged }: { doc: Doc; accounts: Account[]; notify: (s: string) => void; onChanged: (d: Doc) => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const w = doc.review.account_warning!;
+  const current = accounts.find((a) => a.id === doc.account_id);
+  const [to, setTo] = useState<number | "">(w.suggested ?? "");
+  const move = async () => {
+    if (!to) return;
+    try { await api.moveDocument(doc.id, to); onChanged(await api.document(doc.id)); notify(t("docs.moved")); } catch (e) { notify(errorText(e)); }
+  };
+  return (
+    <div className="review-card">
+      <p style={{ margin: 0 }}><strong>{t(`docs.warn.${w.code}` as Key, { account: current?.name ?? "", found: w.found ?? "" })}</strong></p>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <select className="field" style={{ flex: 1, minWidth: 180 }} value={to} onChange={(e) => setTo(e.target.value ? Number(e.target.value) : "")}>
+          <option value="">{t("docs.pickAccount")}</option>
+          {accounts.filter((a) => a.id !== doc.account_id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <button className="btn small" disabled={!to} onClick={move}>{t("docs.move")}</button>
       </div>
     </div>
   );

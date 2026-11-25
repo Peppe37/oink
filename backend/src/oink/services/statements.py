@@ -54,8 +54,8 @@ def pick_account(db: Session, user: User, parsed: Parsed, account_id: int | None
     raise ImportError_("account_not_recognised")
 
 
-def apply(db: Session, account: Account, parsed: Parsed) -> Outcome:
-    result = add_movements(db, account, parsed.movements(account.currency), "import")
+def apply(db: Session, account: Account, parsed: Parsed, document_id: int | None = None) -> Outcome:
+    result = add_movements(db, account, parsed.movements(account.currency), "import", document_id)
     month = parsed.month
     balance_updated = False
     balance = parsed.balance_minor(account.currency)

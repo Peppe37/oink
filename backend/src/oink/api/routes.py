@@ -482,7 +482,7 @@ def transactions(
     query = (
         select(Transaction)
         .where(Transaction.user_id == who.user_id)
-        .order_by(Transaction.day.desc(), Transaction.id.desc())
+        .order_by(Transaction.day.desc(), func.coalesce(Transaction.seq, Transaction.id).desc())
     )
     if account_id is not None:
         query = query.where(Transaction.account_id == account_id)

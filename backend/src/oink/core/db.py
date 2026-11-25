@@ -200,6 +200,10 @@ class Transaction(Base):
     transfer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: an execution of this accumulation plan (services/plans.py)
     plan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: the statement or document it was imported from (to move it to another account)
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    #: order within the day, newest highest (banks give no time of day)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

@@ -84,42 +84,75 @@ def rule_category(rules: list[Rule], text: str) -> str:
 
 
 def add_movements(
-    db: Session, account: Account, movements: list[NewMovement], source: str
-) -> AddResult:
+    db: Session, account: Account, movements: list[NewMovement], source: str,
+    document_id: int | None = None,
+) -> AddResult:  # fmt: skip
+    """Add what is new, skip what is already there:
+
+    - the same movement seen before (its fingerprint), or
+    - the same day and amount already in the account from any source or file (a second
+      statement of the same month, a CSV after the PDF, a movement typed by hand), or
+    - the same amount within a day from another source (the bank link books a card
+      payment a day after the statement shows it).
+
+    Identical movements inside one batch (two coffees) each count once. Within a day the
+    newest is shown first, whatever order the bank or file lists them in."""
+    if movements and movements[0].day > movements[-1].day:
+        movements = list(reversed(movements))  # newest first (bank APIs): store oldest first
+    movements = sorted(movements, key=lambda m: m.day)  # stable: keeps the order within a day
     rules = list(db.scalars(select(Rule).where(Rule.user_id == account.user_id)))
     seen = set(
         db.scalars(select(Transaction.fingerprint).where(Transaction.account_id == account.id))
     )
     counts: Counter[tuple[date, int, str]] = Counter()
-    # The same money from two sources (the bank link and an uploaded statement) has
-    # different wording: within ±1 day and the same amount it is the same movement.
+    same: Counter[tuple[date, int]] = Counter()
     other: Counter[tuple[date, int]] = Counter()
+    blank: dict[tuple[date, int], list[Transaction]] = {}  # existing ones without wording
     if movements:
         start = min(m.day for m in movements) - timedelta(days=1)
         end = max(m.day for m in movements) + timedelta(days=1)
-        for day, amount in db.execute(
-            select(Transaction.day, Transaction.amount).where(
+        for tx in db.scalars(
+            select(Transaction).where(
                 Transaction.account_id == account.id,
-                Transaction.source != source,
                 Transaction.source != "pending",  # provisional: the booked copy replaces it
                 Transaction.day >= start,
                 Transaction.day <= end,
             )
         ):
-            other[(day, amount)] += 1
+            same[(tx.day, tx.amount)] += 1
+            if tx.source != source:
+                other[(tx.day, tx.amount)] += 1
+            if not tx.description.strip("—- ") and not tx.counterparty:
+                blank.setdefault((tx.day, tx.amount), []).append(tx)
+
+    def enrich(at: tuple[date, int], m: NewMovement) -> None:
+        """A duplicate with words where the existing copy has none (Trade Republic through
+        the bank link): the existing movement takes the statement's wording."""
+        found = blank.get(at)
+        if found and m.description.strip("—- "):
+            tx = found.pop()
+            tx.description, tx.counterparty = (
+                m.description.strip()[:500],
+                m.counterparty.strip()[:200],
+            )
+
     added, duplicates = [], 0
     for m in movements:
         key = (m.day, m.amount, normalise(m.description))
         counts[key] += 1
         fp = fingerprint(m.day, m.amount, m.description, counts[key] - 1, m.external_id)
-        if fp in seen:
+        exact = (m.day, m.amount)
+        if fp in seen or same[exact] > 0:
+            if same[exact] > 0:
+                same[exact] -= 1
+                other[exact] = max(0, other[exact] - 1)
+                enrich(exact, m)
             duplicates += 1
             continue
         near = next(
             (
                 k
                 for k in (
-                    (m.day, m.amount),
                     (m.day - timedelta(days=1), m.amount),
                     (m.day + timedelta(days=1), m.amount),
                 )
@@ -129,6 +162,8 @@ def add_movements(
         )
         if near is not None:
             other[near] -= 1
+            same[near] = max(0, same[near] - 1)
+            enrich(near, m)
             duplicates += 1
             continue
         seen.add(fp)
@@ -148,9 +183,13 @@ def add_movements(
             note=m.note,
             source=source,
             fingerprint=fp,
+            document_id=document_id,
         )
         db.add(tx)
         added.append(tx)
+    db.flush()
+    for tx in added:
+        tx.seq = tx.id  # inserted oldest first: a later id is a later movement of the day
     db.commit()
     if added:  # money moved between own accounts is not spending: pair the legs
         from oink.core.db import User
