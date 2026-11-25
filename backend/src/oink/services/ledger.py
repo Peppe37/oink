@@ -7,7 +7,7 @@ import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -90,12 +90,43 @@ def add_movements(
         db.scalars(select(Transaction.fingerprint).where(Transaction.account_id == account.id))
     )
     counts: Counter[tuple[date, int, str]] = Counter()
+    # The same money from two sources (the bank link and an uploaded statement) has
+    # different wording: within ±1 day and the same amount it is the same movement.
+    other: Counter[tuple[date, int]] = Counter()
+    if movements:
+        start = min(m.day for m in movements) - timedelta(days=1)
+        end = max(m.day for m in movements) + timedelta(days=1)
+        for day, amount in db.execute(
+            select(Transaction.day, Transaction.amount).where(
+                Transaction.account_id == account.id,
+                Transaction.source != source,
+                Transaction.day >= start,
+                Transaction.day <= end,
+            )
+        ):
+            other[(day, amount)] += 1
     added, duplicates = [], 0
     for m in movements:
         key = (m.day, m.amount, normalise(m.description))
         counts[key] += 1
         fp = fingerprint(m.day, m.amount, m.description, counts[key] - 1, m.external_id)
         if fp in seen:
+            duplicates += 1
+            continue
+        near = next(
+            (
+                k
+                for k in (
+                    (m.day, m.amount),
+                    (m.day - timedelta(days=1), m.amount),
+                    (m.day + timedelta(days=1), m.amount),
+                )
+                if other[k] > 0
+            ),
+            None,
+        )
+        if near is not None:
+            other[near] -= 1
             duplicates += 1
             continue
         seen.add(fp)

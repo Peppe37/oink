@@ -118,3 +118,27 @@ async def test_linking_takes_the_whole_history_and_relinking_keeps_the_account(
         assert s.scalar(select(Account.connection_id)) == again.id
         assert s.get(Connection, first.id) is None  # the old consent is gone
         assert s.scalar(select(func.count()).select_from(Transaction)) == 2  # no duplicates
+
+
+def test_a_statement_over_a_linked_account_adds_only_what_the_bank_did_not(tmp_path: Path) -> None:
+    from oink.services.ledger import NewMovement, add_movements
+
+    db = Database(f"sqlite:///{tmp_path / 'oink.db'}")
+    db.create()
+    with db.sessions() as s:
+        user = create_user(s, "giu", "giu-password-12")
+        acc = Account(user_id=user.id, name="Revolut", source="linked")
+        s.add(acc)
+        s.commit()
+        add_movements(
+            s,
+            acc,
+            [NewMovement(date(2026, 9, 3), -1200, "CARD PAYMENT BAR", external_id="x1")],
+            "linked",
+        )
+        result = add_movements(s, acc, [
+            NewMovement(date(2026, 9, 2), -1200, "Bar Centrale"),      # the same coffee, booked a day apart
+            NewMovement(date(2026, 6, 1), -5000, "Ristorante"),        # older than the link: new
+            NewMovement(date(2026, 9, 3), -1200, "Bar Centrale"),      # a second coffee that day: new
+        ], "import")  # fmt: skip
+        assert len(result.added) == 2 and result.duplicates == 1
