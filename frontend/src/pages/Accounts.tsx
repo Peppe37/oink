@@ -262,14 +262,16 @@ function AddAccount({ open, onClose, onDone }: { open: boolean; onClose: () => v
   const { t } = useI18n();
   const [step, setStep] = useState<Step>("choose");
   const [providers, setProviders] = useState<Providers | null>(null);
-  useEffect(() => { if (open) { setStep("choose"); api.providers().then(setProviders).catch(() => undefined); } }, [open]);
+  const [preset, setPreset] = useState("");
+  useEffect(() => { if (open) { setStep("choose"); setPreset(""); api.providers().then(setProviders).catch(() => undefined); } }, [open]);
+  const byHand = (bank: string) => { setPreset(bank); setStep("manual"); };
 
   const options: { step: Step; icon: string; title: string; hint: string; colors: [string, string] }[] = [
+    { step: "manual", icon: "manual", title: t("wizard.manual"), hint: t("wizard.manualHint"), colors: ["#9b8cff", "#5a45d6"] },
     { step: "bank", icon: "bank", title: t("wizard.bank"), hint: t("wizard.bankHint"), colors: ["#ff8cc0", "#c94b8c"] },
     { step: "exchange", icon: "exchange", title: t("wizard.exchange"), hint: t("wizard.exchangeHint"), colors: ["#ffc46b", "#e07a12"] },
     { step: "wallet", icon: "crypto", title: t("wizard.wallet"), hint: t("wizard.walletHint"), colors: ["#6ee7d0", "#13897e"] },
     { step: "fintech", icon: "fintech", title: t("wizard.fintech"), hint: t("wizard.fintechHint"), colors: ["#9be15d", "#4f9a1d"] },
-    { step: "manual", icon: "manual", title: t("wizard.manual"), hint: t("wizard.manualHint"), colors: ["#9b8cff", "#5a45d6"] },
   ];
   const keyed = (kind: string) => providers?.keyed.filter((p) => p.kind === kind) ?? [];
 
@@ -282,9 +284,9 @@ function AddAccount({ open, onClose, onDone }: { open: boolean; onClose: () => v
             {options.map((o) => <Row key={o.step} icon={<Tile icon={o.icon} from={o.colors[0]} to={o.colors[1]} size={44} />} title={o.title} detail={o.hint} onClick={() => setStep(o.step)} chevron />)}
           </div>
         )}
-        {step === "bank" && <BankStep providers={providers} />}
+        {step === "bank" && <BankStep providers={providers} onByHand={byHand} />}
         {(step === "exchange" || step === "wallet" || step === "fintech") && <KeyStep providers={keyed(step)} onDone={onDone} />}
-        {step === "manual" && <ManualStep onDone={onDone} />}
+        {step === "manual" && <ManualStep onDone={onDone} preset={preset} providers={providers} />}
       </motion.div>
     </Sheet>
   );
@@ -311,7 +313,7 @@ function Directory({ providers, onSearch }: { providers: Providers; onSearch: (c
   );
 }
 
-function BankStep({ providers }: { providers: Providers | null }) {
+function BankStep({ providers, onByHand }: { providers: Providers | null; onByHand: (bank: string) => void }) {
   const { t } = useI18n();
   const errorText = useErrorText();
   const guess = (navigator.language.split("-")[1] ?? "IT").toUpperCase();
@@ -327,7 +329,16 @@ function BankStep({ providers }: { providers: Providers | null }) {
     api.banks(country).then(setBanks).catch((e) => setError(errorText(e)));
   }, [providers, country, errorText]);
   if (!providers) return <Spinner />;
-  if (!providers.banking) return <div className="stack"><p className="muted">{t("wizard.bankOff")}</p><Directory providers={providers} onSearch={() => undefined} /></div>;
+  const byHand = (
+    <button type="button" className="btn ghost" onClick={() => onByHand(q)}><Icon name="manual" size={18} /> {t("wizard.addByHand")}</button>
+  );
+  if (!providers.banking) return (
+    <div className="stack">
+      <p className="muted">{t("wizard.bankOff")}</p>
+      <p className="note"><Icon name="upload" size={18} /> <span>{t("wizard.addByHandHint")}</span></p>
+      {byHand}
+    </div>
+  );
   const shown = (banks ?? []).filter((b) => b.name.toLowerCase().includes(q.toLowerCase())).slice(0, 60);
   const go = async (bank: string) => {
     setGoing(bank);
@@ -360,6 +371,8 @@ function BankStep({ providers }: { providers: Providers | null }) {
           ))}
         </div>
       )}
+      <p className="muted small-text" style={{ margin: 0 }}>{t("wizard.addByHandHint")}</p>
+      {byHand}
     </div>
   );
 }
@@ -415,29 +428,80 @@ function KeyStep({ providers, onDone }: { providers: KeyedProvider[]; onDone: (t
   );
 }
 
-function ManualStep({ onDone }: { onDone: (text: string) => void }) {
+/** An account without any link: any bank, card, broker or cash. Pick the bank (or type
+ *  it), then the balance by hand or, better, the statement: Oink reads balance and
+ *  movements from it, now and every month. */
+function ManualStep({ onDone, preset, providers }: { onDone: (text: string) => void; preset: string; providers: Providers | null }) {
   const { t } = useI18n();
   const errorText = useErrorText();
   const [currencies, setCurrencies] = useState<{ fiat: string[]; crypto: string[] }>({ fiat: ["EUR"], crypto: [] });
-  const [name, setName] = useState("");
+  const [name, setName] = useState(preset);
   const [kind, setKind] = useState("checking");
   const [currency, setCurrency] = useState("EUR");
   const [balance, setBalance] = useState("");
-  const [institution, setInstitution] = useState("");
+  const [institution, setInstitution] = useState(preset);
   const [iban, setIban] = useState("");
   const [error, setError] = useState("");
+  const [created, setCreated] = useState<Account | null>(null);
+  const [busy, setBusy] = useState("");
+  const [loaded, setLoaded] = useState<string[]>([]);
+  const file = useRef<HTMLInputElement>(null);
   useEffect(() => { api.currencies().then(setCurrencies).catch(() => undefined); }, []);
+  const picks = [...(providers?.directory.filter((d) => d.method !== "key").map((d) => d.name) ?? []), "PayPal", "Klarna"];
+  const pick = (bank: string) => {
+    setInstitution(bank);
+    if (!name || picks.includes(name)) setName(bank);
+    setKind(bank === "Young Platform" ? "crypto" : "checking");
+  };
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setError("");
     try {
-      const acc = await api.addAccount({ name, kind, currency, institution, iban, balance: balance.replace(",", ".") || undefined });
-      onDone(acc.name);
+      const acc = await api.addAccount({ name, kind, currency, institution, iban: iban.replace(/\s/g, ""), balance: balance.replace(",", ".") || undefined });
+      setCreated(acc);
     } catch (err) {
       setError(errorText(err));
     }
   };
+  const upload = async (files: FileList) => {
+    if (!created) return;
+    for (const f of Array.from(files)) {
+      setBusy(f.name);
+      try {
+        const r = await api.uploadDocument(f, { kind: "statement", accountId: created.id });
+        setLoaded((l) => [...l, r.status === "processing" ? t("docs.reading", { name: f.name })
+          : r.import?.added != null ? t("docs.imported", { title: f.name, count: r.import.added })
+          : r.status === "review" ? `${f.name}: ${t("docs.status.review")}` : t("docs.uploaded", { title: f.name })]);
+      } catch (err) {
+        setLoaded((l) => [...l, `${f.name}: ${errorText(err)}`]);
+      }
+    }
+    setBusy("");
+  };
+
+  if (created) return (
+    <div className="stack">
+      <p className="note"><Icon name="check" size={18} /> <span>{t("wizard.created", { name: created.name })}</span></p>
+      <div className="drop" role="button" tabIndex={0} onClick={() => file.current?.click()}>
+        {busy ? <Spinner /> : <Icon name="upload" size={22} />}
+        <strong>{busy ? t("docs.uploading", { name: busy }) : t("wizard.statementNow")}</strong>
+        <span className="small-text">{t("wizard.statementNowHint")}</span>
+      </div>
+      <input ref={file} type="file" multiple hidden accept=".pdf,.csv,.tsv,.txt,.ofx,.qfx,image/*" onChange={(e) => { if (e.target.files?.length) upload(e.target.files); e.target.value = ""; }} />
+      {loaded.map((line, i) => <p key={i} className="muted small-text" style={{ margin: 0 }}>{line}</p>)}
+      <button className="btn big-btn" onClick={() => onDone(created.name)} disabled={!!busy}>{t("wizard.done")}</button>
+    </div>
+  );
+
   return (
     <form className="stack" onSubmit={submit}>
+      <div>
+        <h4 className="section-label">{t("wizard.manualPick")}</h4>
+        <div className="chips wrap-chips">
+          {picks.map((b) => <button type="button" key={b} className={`chip ${institution === b ? "on" : ""}`} onClick={() => pick(b)}>{b}</button>)}
+          <button type="button" className={`chip ${kind === "cash" ? "on" : ""}`} onClick={() => { setInstitution(""); setName(t("wizard.cash")); setKind("cash"); }}>{t("wizard.cash")}</button>
+        </div>
+      </div>
       <Field label={t("accounts.name")}><input className="field" value={name} onChange={(e) => setName(e.target.value)} required autoFocus /></Field>
       <div className="two">
         <Field label={t("accounts.kind")}>
@@ -452,9 +516,9 @@ function ManualStep({ onDone }: { onDone: (text: string) => void }) {
           </select>
         </Field>
       </div>
-      <Field label={t("wizard.openingBalance")}><input className="field num" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="0.00" /></Field>
       <Field label={`${t("accounts.institution")} (${t("common.optional")})`}><input className="field" value={institution} onChange={(e) => setInstitution(e.target.value)} /></Field>
-      <Field label={`${t("accounts.iban")} (${t("common.optional")})`} hint={t("accounts.ibanHint")}><input className="field mono" value={iban} onChange={(e) => setIban(e.target.value.toUpperCase())} /></Field>
+      {kind !== "cash" && <Field label={`${t("accounts.iban")} (${t("common.optional")})`} hint={t("accounts.ibanHint")}><input className="field mono" value={iban} onChange={(e) => setIban(e.target.value.toUpperCase())} /></Field>}
+      <Field label={`${t("wizard.openingBalance")} (${t("common.optional")})`} hint={kind !== "cash" ? t("wizard.balanceFromStatement") : undefined}><input className="field num" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="0.00" /></Field>
       {error && <div className="error">{error}</div>}
       <button className="btn big-btn">{t("common.add")}</button>
     </form>

@@ -177,8 +177,8 @@ export const en = {
   "wizard.walletHint": "A Bitcoin or Ethereum public address. No keys needed.",
   "wizard.fintech": "Wise",
   "wizard.fintechHint": "Balances in every currency with a personal API token.",
-  "wizard.manual": "Manual or by statement",
-  "wizard.manualHint": "Cash, or an account you update with its monthly statement.",
+  "wizard.manual": "Add by hand",
+  "wizard.manualHint": "Any bank, card or broker, or cash: no link needed. Type the balance or upload the statement.",
   "wizard.country": "Country",
   "wizard.searchBank": "Search your bank",
   "wizard.redirect": "You'll go to {bank} to log in, then come back here.",
@@ -549,6 +549,15 @@ export const en = {
   "docs.reprocess": "Read again",
   "docs.rowsRead_one": "One movement read",
   "docs.rowsRead_other": "{count} movements read",
+  "wizard.addByHand": "Add it by hand",
+  "wizard.addByHandHint": "Without a bank link: create the account, then upload its statement (PDF or CSV) and Oink reads balance and movements.",
+  "wizard.manualPick": "Bank or app",
+  "wizard.created": "{name} is in your accounts.",
+  "wizard.statementNow": "Upload its statement now",
+  "wizard.statementNowHint": "PDF, CSV or OFX from the bank's app: Oink reads balance and movements and puts them in this account. You can add more every month.",
+  "wizard.done": "Done",
+  "wizard.cash": "Cash",
+  "wizard.balanceFromStatement": "Leave it empty if you upload the statement: Oink takes the closing balance from it.",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;
