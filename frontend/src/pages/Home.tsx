@@ -128,11 +128,13 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
                   {data.recurring.slice(0, 7).map((r) => (
                     <div key={r.name} className="item">
                       <CategoryTile category={r.category} size={36} />
-                      <span className="row-text">
-                        <span className="row-title ellipsis">{r.name}</span>
-                        {r.increased && <span className="row-detail down">{t("home.increased")}</span>}
+                      <span className="item-main">
+                        <span className="row-text">
+                          <span className="row-title ellipsis">{r.name}</span>
+                          {r.increased && <span className="row-detail down">{t("home.increased")}</span>}
+                        </span>
+                        <span className="num">{t("home.perMonth", { amount: fmt.money(r.monthly, cur) })}</span>
                       </span>
-                      <span className="num">{t("home.perMonth", { amount: fmt.money(r.monthly, cur) })}</span>
                     </div>
                   ))}
                 </div>

@@ -290,8 +290,9 @@ function UsersPanel({ me }: { me: User }) {
       {link && <div className="stack"><span>{t("settings.inviteCreated", { name: link.name })}</span><Secret value={link.url} /></div>}
       <div className="list">
         {users.map((u) => (
-          <div key={u.id} className="item user-row">
+          <div key={u.id} className="item">
             <span className="avatar small">{(u.name || u.username).slice(0, 1).toUpperCase()}</span>
+            <span className="item-main user-row">
             <span className="row-text">
               <span className="row-title">{u.name || u.username} <span className="faint small-text">@{u.username}</span></span>
               <span className="row-detail">{[u.is_admin && t("settings.admin"), u.disabled && t("settings.disabled")].filter(Boolean).join(" · ")}</span>
@@ -303,6 +304,7 @@ function UsersPanel({ me }: { me: User }) {
                 <button className="btn ghost small danger" aria-label={t("settings.deleteUser")} title={t("settings.deleteUser")} onClick={async () => { if (confirm(`${t("settings.deleteUser")}: ${u.username}. ${t("common.confirmDelete")}`)) { await api.deleteUser(u.id); load(); } }}><Icon name="trash" size={16} /></button>
               </span>
             )}
+            </span>
           </div>
         ))}
       </div>

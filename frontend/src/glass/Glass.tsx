@@ -1,22 +1,29 @@
-/* The glass material: Apple-style "liquid glass", not just a blurred transparent box.
+/* The glass material: Apple-style "liquid glass".
 
-   Every <Glass> lightly blurs and saturates what is behind it, with a specular highlight
-   that follows the pointer and a lit rim. With `refract` it also BENDS the background like a
-   lens: an SVG displacement map (strong at the rim, flat in the middle) with chromatic
-   dispersion (red, green and blue bend by different amounts).
+   A pane is clear: what is behind it is not frosted, only slightly saturated, and it stays
+   sharp in the middle. Near the rim the glass is a convex bezel, so the background bends
+   (refraction computed with Snell's law, index 1.5) and the three colour channels bend by
+   different amounts, a faint prismatic fringe. A thin specular rim catches the light, and a
+   soft highlight follows the pointer.
 
-   - Chromium: the lens runs inside `backdrop-filter`, so everything behind refracts.
-   - Safari and Firefox can't put SVG filters in `backdrop-filter`, but they can on normal
-     elements: the glass draws its own copy of the aurora, aligned to the viewport and in
-     phase with it, runs the lens on that copy and shows it at the rim. The centre stays a
-     clear, lightly blurred window onto the content, the edges magnify and fringe. */
+   Structure: the element itself paints nothing behind its content. A clipped `.glass-layer`
+   child carries the backdrop (so nothing is ever drawn outside the rounded shape, and nested
+   panes still get their own backdrop), a `.glass-rim` child draws the light on the edge.
 
-import { motion, type HTMLMotionProps, type MotionStyle } from "framer-motion";
+   - Chromium: the lens is an SVG filter inside `backdrop-filter`, so everything behind
+     refracts: text, charts, the aurora.
+   - Safari and Firefox can't run SVG filters in `backdrop-filter`. Panes marked `refract`
+     draw their own copy of the aurora, aligned to the viewport and in phase with it, run the
+     same lens on it and show it at the rim; the rest is clear glass with the same rim light. */
+
+import { motion, type HTMLMotionProps } from "framer-motion";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 const backdropLens = (() => {
   if (typeof window === "undefined") return false;
-  const chromium = "chrome" in window && !/iPhone|iPad|Macintosh.*Safari(?!.*Chrome)/.test(navigator.userAgent);
+  // Chromium (Chrome, Edge, Brave, Arc, Electron) says "Chrome/"; Safari never does, and
+  // every browser on iOS is WebKit underneath ("CriOS" is not "Chrome/").
+  const chromium = /\b(Chrome|Chromium|Edg)\//.test(navigator.userAgent) && !/iPhone|iPad/.test(navigator.userAgent);
   return chromium && CSS.supports("backdrop-filter", "url(#x)");
 })();
 
@@ -24,78 +31,125 @@ const backdropLens = (() => {
 const T0 = performance.now();
 export const auroraPhase = () => (performance.now() - T0) / 1000;
 
-/** A displacement map for a rounded rectangle: R/G = x/y offset (128 = none). Near the rim
- *  pixels are pulled inward along the edge normal, so the background looks magnified there,
- *  as it does at the curved edge of a real slab of glass. */
-function lensMap(width: number, height: number, radius: number, bezel: number): string {
-  const scale = 0.5;
+/** Displacement across the bezel, 0 at the outer edge to 1 at the inner edge of the bezel:
+ *  a ray going straight down through a convex squircle surface (n = 1.5) is bent by the
+ *  slope of the surface; the offset is the height times the tangent of the bend. */
+const PROFILE = (() => {
+  const n = 1.5;
+  const steps = 96;
+  const height = (t: number) => Math.pow(1 - Math.pow(1 - t, 4), 1 / 4);
+  const out: number[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = Math.min(0.999, Math.max(0.001, i / steps));
+    const dt = 0.001;
+    const slope = (height(Math.min(1, t + dt)) - height(Math.max(0, t - dt))) / (2 * dt);
+    const incidence = Math.atan(slope);
+    const refracted = Math.asin(Math.sin(incidence) / n);
+    out.push(height(t) * Math.tan(incidence - refracted));
+  }
+  const max = Math.max(...out);
+  return out.map((v) => v / max);
+})();
+const profile = (t: number) => PROFILE[Math.round(Math.max(0, Math.min(1, t)) * (PROFILE.length - 1))];
+
+type Maps = { displacement: string; rim: string };
+
+/** Two images for a rounded rectangle: the displacement map (R/G = x/y offset, 128 = none,
+ *  pixels near the rim pulled inward along the edge normal) and the rim mask (alpha: 1 on
+ *  the bezel, fading to 0 over its inner half, so the middle comes straight from the page). */
+function lensMaps(width: number, height: number, radius: number, bezel: number): Maps | null {
+  const scale = width * height > 400_000 ? 0.35 : 0.5;
   const w = Math.max(2, Math.round(width * scale));
   const h = Math.max(2, Math.round(height * scale));
   const r = radius * scale;
   const b = Math.max(2, bezel * scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-  const img = ctx.createImageData(w, h);
+  const make = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    return ctx ? { canvas, ctx, img: ctx.createImageData(w, h) } : null;
+  };
+  const disp = make();
+  const rim = make();
+  if (!disp || !rim) return null;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const cx = Math.min(Math.max(x, r), w - r);
-      const cy = Math.min(Math.max(y, r), h - r);
+      const px = x + 0.5;
+      const py = y + 0.5;
+      const cx = Math.min(Math.max(px, r), w - r);
+      const cy = Math.min(Math.max(py, r), h - r);
       let nx = 0;
       let ny = 0;
       let d: number;
-      if ((x < r || x > w - r) && (y < r || y > h - r)) {
-        const dx = x - cx;
-        const dy = y - cy;
+      if ((px < r || px > w - r) && (py < r || py > h - r)) {
+        const dx = px - cx;
+        const dy = py - cy;
         const len = Math.hypot(dx, dy) || 1;
         d = r - len;
         nx = -dx / len;
         ny = -dy / len;
       } else {
-        const dl = x, dr = w - x, dt = y, db = h - y;
+        const dl = px, dr = w - px, dt = py, db = h - py;
         d = Math.min(dl, dr, dt, db);
         if (d === dl) nx = 1;
         else if (d === dr) nx = -1;
         else if (d === dt) ny = 1;
         else ny = -1;
       }
-      // convex profile: displacement grows like a lens toward the rim (circular bezel)
-      const t = Math.max(0, Math.min(1, 1 - d / b));
-      const k = 1 - Math.sqrt(1 - t * t);
       const i = (y * w + x) * 4;
-      img.data[i] = 128 + nx * k * 127;
-      img.data[i + 1] = 128 + ny * k * 127;
-      img.data[i + 2] = 128;
-      img.data[i + 3] = 255;
+      const inside = d >= 0;
+      const t = d / b; // 0 at the edge, 1 where the bezel ends
+      const k = inside && t < 1 ? 1 - profile(t) : 0;
+      disp.img.data[i] = 128 + nx * k * 127;
+      disp.img.data[i + 1] = 128 + ny * k * 127;
+      disp.img.data[i + 2] = 128;
+      disp.img.data[i + 3] = 255;
+      // rim mask: full on the outer half of the bezel, smooth fade over the inner half
+      const fade = t <= 0.5 ? 1 : t >= 1.4 ? 0 : 1 - (t - 0.5) / 0.9;
+      const a = inside ? fade * fade * (3 - 2 * fade) : 0;
+      rim.img.data[i] = 255;
+      rim.img.data[i + 1] = 255;
+      rim.img.data[i + 2] = 255;
+      rim.img.data[i + 3] = Math.round(a * 255);
     }
   }
-  ctx.putImageData(img, 0, 0);
-  return canvas.toDataURL();
+  disp.ctx.putImageData(disp.img, 0, 0);
+  rim.ctx.putImageData(rim.img, 0, 0);
+  return { displacement: disp.canvas.toDataURL(), rim: rim.canvas.toDataURL() };
 }
 
 type Props = HTMLMotionProps<"div"> & {
+  /** Also refract on Safari/Firefox (an aurora copy at the rim). Chromium always refracts. */
   refract?: boolean;
+  /** How far the bezel bends the background, in px. */
   strength?: number;
+  /** Corner radius in px; "pill" rounds the short side fully. */
   radius?: number;
   variant?: "pill" | "tight";
+  /** Frosting (blur, px) for panes that hold long text, like sheets. 0 = clear glass. */
+  frost?: number;
   press?: boolean;
 };
 
-function LensFilter({ id, map, w, h, strength }: { id: string; map: string; w: number; h: number; strength: number }) {
+function LensFilter({ id, maps, w, h, strength, edgeOnly }: { id: string; maps: Maps; w: number; h: number; strength: number; edgeOnly: boolean }) {
   return (
-    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden>
+    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden focusable="false">
       <filter id={id} x="0" y="0" width={w} height={h} filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
-        <feImage href={map} x="0" y="0" width={w} height={h} preserveAspectRatio="none" result="map" />
-        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength} xChannelSelector="R" yChannelSelector="G" result="dr" />
-        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength * 0.9} xChannelSelector="R" yChannelSelector="G" result="dg" />
-        <feDisplacementMap in="SourceGraphic" in2="map" scale={strength * 0.8} xChannelSelector="R" yChannelSelector="G" result="db" />
+        <feImage href={maps.displacement} x="0" y="0" width={w} height={h} preserveAspectRatio="none" result="map" />
+        <feImage href={maps.rim} x="0" y="0" width={w} height={h} preserveAspectRatio="none" result="rim" />
+        <feGaussianBlur in="SourceGraphic" stdDeviation="0.8" result="soft" />
+        <feDisplacementMap in="soft" in2="map" scale={strength} xChannelSelector="R" yChannelSelector="G" result="dr" />
+        <feDisplacementMap in="soft" in2="map" scale={strength * 0.92} xChannelSelector="R" yChannelSelector="G" result="dg" />
+        <feDisplacementMap in="soft" in2="map" scale={strength * 0.84} xChannelSelector="R" yChannelSelector="G" result="db" />
         <feColorMatrix in="dr" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r" />
         <feColorMatrix in="dg" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g" />
         <feColorMatrix in="db" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b" />
-        <feComposite in="r" in2="g" operator="arithmetic" k2="1" k3="1" result="rg" />
-        <feComposite in="rg" in2="b" operator="arithmetic" k2="1" k3="1" />
+        <feBlend in="r" in2="g" mode="screen" result="rg" />
+        <feBlend in="rg" in2="b" mode="screen" result="bent" />
+        <feGaussianBlur in="bent" stdDeviation="0.4" result="bentSoft" />
+        <feComposite in="bentSoft" in2="rim" operator="in" result="edge" />
+        {!edgeOnly && <feComposite in="edge" in2="SourceGraphic" operator="over" />}
       </filter>
     </svg>
   );
@@ -130,45 +184,56 @@ function AuroraCopy({ host, filter }: { host: React.RefObject<HTMLDivElement>; f
   );
 }
 
-export function Glass({ refract = false, strength = 40, radius = 26, variant, press, className = "", style, children, ...rest }: Props) {
+export function Glass({ refract = false, strength = 34, radius = 26, variant, frost = 0, press, className = "", style, children, ...rest }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const id = useId().replace(/:/g, "");
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
-  const [map, setMap] = useState("");
+  const [maps, setMaps] = useState<Maps | null>(null);
+  const lens = backdropLens || refract;
 
   useLayoutEffect(() => {
-    if (!refract || !ref.current) return;
+    if (!lens || !ref.current) return;
     const el = ref.current;
     const observer = new ResizeObserver(([entry]) => {
       const w = Math.round(entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width);
       const h = Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
-      setSize((old) => (old && Math.abs(old.w - w) < 3 && Math.abs(old.h - h) < 3 ? old : { w, h }));
+      setSize((old) => (old && Math.abs(old.w - w) < 2 && Math.abs(old.h - h) < 2 ? old : { w, h }));
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [refract]);
+  }, [lens]);
 
+  const corner = variant === "pill" ? 999 : variant === "tight" ? 22 : radius;
   useEffect(() => {
-    if (!size || size.w < 4 || size.h < 4) return;
-    const r = variant === "pill" ? size.h / 2 : radius;
-    setMap(lensMap(size.w, size.h, Math.min(r, size.h / 2, size.w / 2), Math.min(30, size.h / 2.4, size.w / 2.4)));
-  }, [size, radius, variant]);
+    if (!size || size.w < 8 || size.h < 8) return;
+    const r = Math.min(corner, size.h / 2, size.w / 2);
+    const bezel = Math.min(26, size.h / 2.2, size.w / 2.2);
+    const frame = requestAnimationFrame(() => setMaps(lensMaps(size.w, size.h, r, bezel)));
+    return () => cancelAnimationFrame(frame);
+  }, [size, corner]);
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     event.currentTarget.style.setProperty("--mx", `${event.clientX - box.left}px`);
     event.currentTarget.style.setProperty("--my", `${event.clientY - box.top}px`);
+    rest.onPointerMove?.(event);
   };
 
-  const ready = refract && map && size;
-  const filterStyle: CSSProperties =
-    ready && backdropLens ? { backdropFilter: `url(#lg-${id}) blur(3px) saturate(180%) brightness(1.06)` } : {};
-  const classes = ["glass", refract ? "liquid" : "", variant ?? "", press ? "press" : "", className].filter(Boolean).join(" ");
+  const ready = lens && maps && size;
+  const tail = `${frost ? ` blur(${frost}px)` : ""} saturate(${frost ? 180 : 150}%) brightness(1.05)`;
+  const layerStyle: CSSProperties =
+    ready && backdropLens
+      ? { backdropFilter: `url(#lg-${id})${tail}`, WebkitBackdropFilter: `url(#lg-${id})${tail}` }
+      : { backdropFilter: tail.trim(), WebkitBackdropFilter: tail.trim() };
+  const classes = ["glass", frost ? "frosted" : "", variant ?? "", press ? "press" : "", className].filter(Boolean).join(" ");
 
   return (
-    <motion.div ref={ref} className={classes} style={{ ...(filterStyle as MotionStyle), ...style }} onPointerMove={onPointerMove} {...rest}>
-      {ready && <LensFilter id={`lg-${id}`} map={map} w={size.w} h={size.h} strength={strength} />}
-      {ready && !backdropLens && <AuroraCopy host={ref} filter={`url(#lg-${id}) saturate(160%)`} />}
+    <motion.div ref={ref} className={classes} style={{ ["--r" as string]: `${corner}px`, ...style }} {...rest} onPointerMove={onPointerMove}>
+      {ready && <LensFilter id={`lg-${id}`} maps={maps} w={size.w} h={size.h} strength={strength} edgeOnly={!backdropLens} />}
+      <span className="glass-layer" aria-hidden style={layerStyle}>
+        {ready && !backdropLens && refract && <AuroraCopy host={ref} filter={`url(#lg-${id}) saturate(160%)`} />}
+      </span>
+      <span className="glass-rim" aria-hidden />
       {children as React.ReactNode}
     </motion.div>
   );

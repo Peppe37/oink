@@ -104,11 +104,13 @@ export function Activity({ ai, notify }: { ai: boolean; notify: (s: string) => v
                 {txs.map((tx) => (
                   <button key={tx.id} className="item press-row" onClick={() => setSelected(tx)}>
                     <CategoryTile category={tx.category} />
-                    <span className="row-text">
-                      <span className="row-title ellipsis">{tx.counterparty || tx.description}</span>
-                      <span className="row-detail ellipsis">{categoryLabel(t, tx.category)}{accounts.length > 1 ? ` · ${accountName(tx.account_id)}` : ""}</span>
+                    <span className="item-main">
+                      <span className="row-text">
+                        <span className="row-title ellipsis">{tx.counterparty || tx.description}</span>
+                        <span className="row-detail ellipsis">{categoryLabel(t, tx.category)}{accounts.length > 1 ? ` · ${accountName(tx.account_id)}` : ""}</span>
+                      </span>
+                      <span className={`num amount ${Number(tx.amount) > 0 ? "up" : ""}`}>{fmt.money(tx.amount, tx.currency, { sign: Number(tx.amount) > 0 })}</span>
                     </span>
-                    <span className={`num amount ${Number(tx.amount) > 0 ? "up" : ""}`}>{fmt.money(tx.amount, tx.currency, { sign: Number(tx.amount) > 0 })}</span>
                   </button>
                 ))}
               </Glass>

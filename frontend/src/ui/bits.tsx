@@ -100,7 +100,7 @@ export function Navigation() {
   };
   return (
     <nav className="dock-wrap" aria-label="Oink">
-      <Glass refract strength={46} variant="tight" className="dock"
+      <Glass refract strength={30} radius={24} className="dock"
         onPointerMove={(e) => pointer.set(e.clientX)}
         onPointerLeave={() => pointer.set(Infinity)}
         onTouchMove={(e) => pointer.set(e.touches[0].clientX)}
@@ -126,19 +126,10 @@ function DockIcon({ pointer, base, peak, label, icon, colors, active, bouncing, 
   });
   const target = useTransform(distance, [-base * 2.6, 0, base * 2.6], [base, peak, base]);
   const size = useSpring(target, { stiffness: 340, damping: 22, mass: 0.35 });
-  const [hover, setHover] = useState(false);
   return (
-    <motion.button ref={ref} className={`dock-item ${active ? "active" : ""}`} aria-label={label} aria-current={active ? "page" : undefined}
-      style={{ width: size, height: size }} onClick={onOpen}
-      onHoverStart={() => setHover(true)} onHoverEnd={() => setHover(false)}
+    <motion.button ref={ref} className="dock-item" aria-label={label} aria-current={active ? "page" : undefined}
+      style={{ width: size, height: base }} onClick={onOpen}
       animate={bouncing ? { y: [0, -22, 0, -8, 0] } : { y: 0 }} transition={{ duration: 0.65, ease: "easeOut" }}>
-      <AnimatePresence>
-        {hover && (
-          <motion.span className="dock-label" initial={{ opacity: 0, y: 6, x: "-50%" }} animate={{ opacity: 1, y: 0, x: "-50%" }} exit={{ opacity: 0, y: 4, x: "-50%" }}>
-            {label}
-          </motion.span>
-        )}
-      </AnimatePresence>
       <span className="dock-tile" style={{ background: `linear-gradient(150deg, ${colors[0]}, ${colors[1]})` }}>
         <Icon name={icon} size={22} stroke={1.9} style={{ width: "50%", height: "50%" }} />
       </span>
@@ -177,7 +168,7 @@ export function Sheet({ open, onClose, title, children, wide = false }: { open: 
     <AnimatePresence>
       {open && (
         <motion.div className="sheet-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-          <Glass
+          <Glass frost={28}
             className={`sheet ${large ? "panel" : ""} ${wide ? "wide" : ""}`}
             role="dialog" aria-modal="true" aria-label={title}
             onClick={(e) => e.stopPropagation()}
@@ -208,7 +199,7 @@ export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
     return () => clearTimeout(t);
   }, [text, onDone]);
   return createPortal(
-    <Glass variant="pill" className="toast" role="status" initial={{ y: -40, x: "-50%", opacity: 0 }} animate={{ y: 0, x: "-50%", opacity: 1 }} exit={{ y: -40, x: "-50%", opacity: 0 }}>
+    <Glass variant="pill" frost={16} className="toast" role="status" initial={{ y: -40, x: "-50%", opacity: 0 }} animate={{ y: 0, x: "-50%", opacity: 1 }} exit={{ y: -40, x: "-50%", opacity: 0 }}>
       {text}
     </Glass>,
     document.body,
@@ -219,12 +210,14 @@ export function Row({ icon, title, detail, right, onClick, chevron = false }: { 
   const content = (
     <>
       {icon}
-      <span className="row-text">
-        <span className="row-title ellipsis">{title}</span>
-        {detail && <span className="row-detail ellipsis">{detail}</span>}
+      <span className="item-main">
+        <span className="row-text">
+          <span className="row-title ellipsis">{title}</span>
+          {detail && <span className="row-detail ellipsis">{detail}</span>}
+        </span>
+        {right && <span className="row-right">{right}</span>}
+        {chevron && <Icon name="chevron" size={18} className="faint" />}
       </span>
-      {right && <span className="row-right">{right}</span>}
-      {chevron && <Icon name="chevron" size={18} className="faint" />}
     </>
   );
   return onClick ? <button className="item press-row" onClick={onClick}>{content}</button> : <div className="item">{content}</div>;

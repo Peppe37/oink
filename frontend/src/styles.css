@@ -18,13 +18,15 @@
   --down: #ff7a90;
   --warn: #ffd166;
 
-  --glass-tint: rgba(255, 255, 255, 0.08);
-  --glass-tint-2: rgba(255, 255, 255, 0.025);
-  --glass-rim: rgba(255, 255, 255, 0.5);
-  --glass-rim-2: rgba(255, 255, 255, 0.08);
+  --glass-tint: rgba(255, 255, 255, 0.045);
+  --glass-tint-2: rgba(255, 255, 255, 0.01);
+  --glass-rim: rgba(255, 255, 255, 0.7);
+  --glass-rim-2: rgba(255, 255, 255, 0.22);
+  --glass-edge: rgba(255, 255, 255, 0.1);
+  --glass-glow: rgba(255, 255, 255, 0.35);
   --glass-shadow: 0 24px 60px -14px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.22);
   --spec: rgba(255, 255, 255, 0.2);
-  --sheet-bg: rgba(28, 24, 36, 0.72);
+  --sheet-bg: rgba(28, 24, 36, 0.55);
 
   --radius: 26px;
   --radius-s: 18px;
@@ -43,13 +45,15 @@
     --fg-2: rgba(20, 14, 26, 0.6);
     --fg-3: rgba(20, 14, 26, 0.4);
     --line: rgba(20, 14, 26, 0.09);
-    --glass-tint: rgba(255, 255, 255, 0.55);
-    --glass-tint-2: rgba(255, 255, 255, 0.25);
-    --glass-rim: rgba(255, 255, 255, 0.95);
-    --glass-rim-2: rgba(255, 255, 255, 0.35);
+    --glass-tint: rgba(255, 255, 255, 0.3);
+    --glass-tint-2: rgba(255, 255, 255, 0.12);
+    --glass-rim: rgba(255, 255, 255, 1);
+    --glass-rim-2: rgba(255, 255, 255, 0.5);
+    --glass-edge: rgba(60, 30, 70, 0.08);
+    --glass-glow: rgba(255, 255, 255, 0.6);
     --glass-shadow: 0 22px 56px -18px rgba(80, 40, 90, 0.28), 0 2px 6px rgba(80, 40, 90, 0.07);
     --spec: rgba(255, 255, 255, 0.7);
-    --sheet-bg: rgba(250, 247, 252, 0.78);
+    --sheet-bg: rgba(250, 247, 252, 0.6);
     --up: #12a46a;
     --down: #e0405e;
     color-scheme: light;
@@ -71,7 +75,7 @@ a { color: inherit; }
 h1, h2, h3, h4 { margin: 0; }
 
 /* -- the aurora ------------------------------------------------------------------------ */
-.aurora { position: fixed; inset: -20vmax; z-index: 0; pointer-events: none; filter: blur(60px) saturate(140%); }
+.aurora { position: fixed; inset: -20vmax; z-index: 0; pointer-events: none; filter: blur(22px) saturate(140%); }
 .aurora i { position: absolute; width: 48vmax; height: 48vmax; border-radius: 50%; opacity: 0.55; mix-blend-mode: screen; animation: drift 28s var(--ease) infinite alternate; }
 @media (prefers-color-scheme: light) { .aurora i { mix-blend-mode: multiply; opacity: 0.3; } }
 .aurora i:nth-child(1) { background: var(--pink); left: 10%; top: 5%; }
@@ -86,56 +90,49 @@ h1, h2, h3, h4 { margin: 0; }
 }
 
 /* -- glass ---------------------------------------------------------------------------- */
+/* Clear liquid glass (see Glass.tsx): the pane paints nothing behind its content itself; the
+   clipped .glass-layer carries the backdrop (lens + a touch of saturation), .glass-rim the
+   specular edge, ::before the soft highlight that follows the pointer. */
 .glass {
-  --mx: 30%; --my: 0%;
-  position: relative; isolation: isolate; border-radius: var(--radius);
-  background: linear-gradient(160deg, var(--glass-tint), var(--glass-tint-2));
-  -webkit-backdrop-filter: blur(22px) saturate(185%) brightness(1.05);
-  backdrop-filter: blur(22px) saturate(185%) brightness(1.05);
-  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-rim), inset 0 -1px 0 var(--glass-rim-2);
-  overflow: hidden;
+  --mx: 30%; --my: 0%; --r: var(--radius);
+  position: relative; isolation: isolate; border-radius: var(--r);
+  box-shadow: var(--glass-shadow); overflow: hidden;
+}
+.glass-layer {
+  position: absolute; inset: 0; z-index: -2; border-radius: inherit; overflow: hidden; pointer-events: none;
+  clip-path: inset(0 round var(--r));
+  background: linear-gradient(165deg, var(--glass-tint), var(--glass-tint-2));
+}
+.glass-rim {
+  position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  box-shadow:
+    inset 1.5px 1.5px 0 -0.5px var(--glass-rim),
+    inset -1px -1px 0 -0.5px var(--glass-rim-2),
+    inset 0 0 0 0.5px var(--glass-edge),
+    inset 0 0 18px -6px var(--glass-glow);
+}
+.glass-rim::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(135deg, var(--glass-rim) 0%, transparent 30%, transparent 70%, var(--glass-rim-2) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  opacity: 0.8;
 }
 .glass::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(420px circle at var(--mx) var(--my), var(--spec), transparent 45%), linear-gradient(180deg, rgba(255, 255, 255, 0.11), transparent 28%);
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(320px circle at var(--mx) var(--my), var(--spec), transparent 45%);
+  opacity: 0.7;
 }
-.glass::after {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
-  background: linear-gradient(135deg, var(--glass-rim), transparent 35%, transparent 65%, var(--glass-rim-2));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-}
-/* Liquid glass: clearer than frosted (little blur, more saturation), a lens at the rim,
-   a bright specular edge and a soft inner glow; on Safari the rim refracts a live copy of
-   the aurora (see Glass.tsx). */
-.glass.liquid {
-  background: linear-gradient(160deg, color-mix(in srgb, var(--glass-tint) 70%, transparent), transparent 60%);
-  -webkit-backdrop-filter: blur(7px) saturate(190%) brightness(1.06);
-  backdrop-filter: blur(7px) saturate(190%) brightness(1.06);
-  box-shadow: var(--glass-shadow), inset 0 1px 1px rgba(255, 255, 255, 0.55), inset 0 -1px 1px rgba(255, 255, 255, 0.12),
-    inset 0 0 22px rgba(255, 255, 255, 0.07);
-}
-.glass.liquid::before {
-  background:
-    radial-gradient(360px circle at var(--mx) var(--my), var(--spec), transparent 42%),
-    linear-gradient(170deg, rgba(255, 255, 255, 0.2), transparent 22%, transparent 78%, rgba(255, 255, 255, 0.06));
-}
-.lens-copy {
-  position: absolute; inset: 0; z-index: -2; border-radius: inherit; overflow: hidden; pointer-events: none; opacity: 0.95;
-  -webkit-mask: linear-gradient(90deg, #000, transparent 16%, transparent 84%, #000), linear-gradient(180deg, #000, transparent 28%, transparent 72%, #000);
-  -webkit-mask-composite: source-over;
-  mask: linear-gradient(90deg, #000, transparent 16%, transparent 84%, #000), linear-gradient(180deg, #000, transparent 28%, transparent 72%, #000);
-  mask-composite: add;
-}
+.glass.frosted .glass-layer { background: var(--sheet-bg); }
+.lens-copy { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; }
 .lens-copy-inner { position: absolute; left: 0; top: 0; will-change: transform; }
 .aurora.copy { position: absolute; }
 .aurora.copy i:nth-child(1) { animation-delay: var(--phase); }
 .aurora.copy i:nth-child(2) { animation-delay: calc(var(--phase) - 8s); }
 .aurora.copy i:nth-child(3) { animation-delay: calc(var(--phase) - 16s); }
 .aurora.copy i:nth-child(4) { animation-delay: var(--phase); }
-.glass.pill { border-radius: 999px; }
-.glass.tight { border-radius: var(--radius-s); }
 .glass.press { cursor: pointer; transition: transform 0.4s var(--ease); }
 .glass.press:active { transform: scale(0.97); }
+@media (forced-colors: active) { .glass-layer { background: Canvas; backdrop-filter: none !important; } }
 
 /* -- layout --------------------------------------------------------------------------- */
 .app { position: relative; z-index: 1; min-height: 100vh; padding: calc(var(--safe-t) + 18px) 16px calc(var(--tabbar) + var(--safe-b) + 28px); }
@@ -224,11 +221,23 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 
 /* -- lists ---------------------------------------------------------------------------- */
 .list { display: grid; }
-.item { display: flex; align-items: center; gap: 13px; padding: 11px 2px; min-height: 58px; border: 0; border-top: 1px solid var(--line); background: none; width: 100%; text-align: left; color: inherit; }
-.item:first-child { border-top: 0; }
-.press-row { cursor: pointer; border-radius: 12px; transition: background 0.2s; }
-.press-row:active { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-@media (hover: hover) { .press-row:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); } }
+.item { display: flex; align-items: center; gap: 13px; padding: 0 0 0 2px; min-height: 58px; border: 0; background: none; width: 100%; text-align: left; color: inherit; font: inherit; }
+.item-main { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 12px; padding: 11px 4px 11px 0; box-shadow: inset 0 0.5px 0 var(--line); }
+.item:first-child .item-main { box-shadow: none; }
+.press-row { cursor: pointer; transition: background 0.15s; outline: none; }
+.press-row:active { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+@media (hover: hover) { .press-row:hover { background: color-mix(in srgb, var(--fg) 4.5%, transparent); } }
+.press-row:hover .item-main, .press-row:active .item-main, .press-row:hover + .item .item-main, .press-row:active + .item .item-main { box-shadow: none; }
+.press-row:focus-visible { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.list .press-row { border-radius: 10px; margin: 0 -8px; padding-left: 10px; width: calc(100% + 16px); }
+.list .press-row .item-main { padding-right: 8px; }
+/* inside sheets a list is an inset group, like Settings on a Mac */
+.sheet .list { background: color-mix(in srgb, var(--fg) 5%, transparent); border-radius: 14px; padding: 0 12px; }
+.sheet .list .press-row { margin: 0 -12px; padding-left: 14px; width: calc(100% + 24px); border-radius: 0; }
+.sheet .list .press-row:first-child { border-radius: 14px 14px 0 0; }
+.sheet .list .press-row:last-child { border-radius: 0 0 14px 14px; }
+.sheet .list .press-row:only-child { border-radius: 14px; }
+.sheet .list .press-row .item-main { padding-right: 12px; }
 .row-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
 .row-title { font-weight: 600; font-size: 15.5px; }
 .row-detail { font-size: 13px; color: var(--fg-2); }
@@ -323,34 +332,36 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .oink { position: absolute; left: 70%; top: -6px; font-weight: 800; font-size: 13px; color: var(--pink-2); white-space: nowrap; pointer-events: none; }
 
 /* -- the dock ----------------------------------------------------------------------------- */
+/* Like a Mac's: the shelf keeps its height and only gets wider; a magnified icon grows out of
+   the top of the shelf. */
 .dock-wrap { position: fixed; z-index: 30; left: 0; right: 0; bottom: calc(var(--safe-b) + 10px); display: flex; justify-content: center; pointer-events: none; }
 .dock {
-  pointer-events: auto; display: flex; align-items: flex-end; gap: 6px; padding: 7px 9px; border-radius: 26px;
-  max-width: calc(100vw - 16px); overflow: visible;
+  pointer-events: auto; display: flex; align-items: flex-end; gap: 6px; padding: 6px 8px 8px; overflow: visible;
+  max-width: calc(100vw - 16px);
 }
-.dock-item { position: relative; display: grid; place-items: center; border: 0; padding: 0; background: none; cursor: pointer; flex: none; transform-origin: bottom center; }
+.dock-item {
+  position: relative; display: block; border: 0; padding: 0; background: none; cursor: pointer; flex: none;
+  outline: none; -webkit-tap-highlight-color: transparent;
+}
+.dock-item:focus, .dock-item:focus-visible { outline: none; }
 .dock-tile {
-  width: 100%; height: 100%; border-radius: 24%; display: grid; place-items: center; color: #fff; position: relative; overflow: hidden;
+  position: absolute; left: 0; bottom: 0; width: 100%; aspect-ratio: 1; border-radius: 23%; display: grid; place-items: center; color: #fff; overflow: hidden;
   box-shadow: 0 6px 14px -6px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 .dock-tile::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255, 255, 255, 0.38), transparent 50%); }
 .dock-tile svg { position: relative; z-index: 1; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2)); }
-.dock-item.active .dock-tile { box-shadow: 0 8px 18px -6px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 0 2px rgba(255, 255, 255, 0.35); }
+.dock-item:focus-visible .dock-tile { filter: brightness(1.12); }
 .dock-dot { position: absolute; bottom: -6px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--fg); }
-.dock-label {
-  position: absolute; bottom: calc(100% + 10px); left: 50%; padding: 5px 10px; border-radius: 9px; white-space: nowrap; pointer-events: none;
-  font-size: 12.5px; font-weight: 600; color: var(--fg); background: var(--sheet-bg); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
-  box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--line);
-}
 @media (max-width: 699px) { .app { padding-bottom: calc(var(--safe-b) + 110px); } }
 
 /* -- sheets & toasts --------------------------------------------------------------------- */
 .sheet-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(8, 4, 14, 0.45); display: flex; align-items: flex-end; justify-content: center; -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 .sheet {
   width: 100%; max-height: calc(100dvh - var(--safe-t) - 24px); display: flex; flex-direction: column;
-  border-radius: 28px 28px 0 0; background: var(--sheet-bg); padding-bottom: var(--safe-b);
-  -webkit-backdrop-filter: blur(40px) saturate(190%); backdrop-filter: blur(40px) saturate(190%);
+  --r: 28px; border-radius: 28px 28px 0 0; padding-bottom: var(--safe-b);
 }
+.sheet .glass-layer { clip-path: inset(0 round 28px 28px 0 0); }
+.sheet.panel .glass-layer { clip-path: inset(0 round 28px); }
 .sheet.panel { width: min(560px, calc(100vw - 48px)); border-radius: 28px; margin: auto; max-height: min(86vh, 900px); padding-bottom: 0; }
 .sheet.panel.wide { width: min(760px, calc(100vw - 48px)); }
 .sheet-backdrop:has(.panel) { align-items: center; }
