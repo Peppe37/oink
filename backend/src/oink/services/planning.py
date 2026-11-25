@@ -21,7 +21,7 @@ from oink.services.reports import Book, month_summary, previous_months, recurrin
 
 log = logging.getLogger("oink.planning")
 PER_MONTH = {"weekly": 52 / 12, "monthly": 1.0, "quarterly": 1 / 3, "yearly": 1 / 12}
-ESSENTIAL = {"home", "bills", "groceries", "health", "transport", "car", "taxes", "fees",
+ESSENTIAL = {"home", "bills", "groceries", "health", "transport", "car", "taxes", "fees", "loans",
              "education"}  # fmt: skip
 LIQUID = {"checking", "savings", "cash"}
 

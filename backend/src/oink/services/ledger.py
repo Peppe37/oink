@@ -32,6 +32,7 @@ CATEGORIES = [
     "gifts",
     "taxes",
     "fees",
+    "loans",
     "salary",
     "income",
     "transfers",

@@ -291,6 +291,7 @@ export const en = {
   "category.gifts": "Gifts",
   "category.taxes": "Taxes",
   "category.fees": "Fees",
+  "category.loans": "Loans",
   "category.salary": "Salary",
   "category.income": "Income",
   "category.transfers": "Transfers",

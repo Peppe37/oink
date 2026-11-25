@@ -289,6 +289,7 @@ export const it: Dict = {
   "category.gifts": "Regali",
   "category.taxes": "Tasse",
   "category.fees": "Commissioni",
+  "category.loans": "Finanziamenti",
   "category.salary": "Stipendio",
   "category.income": "Entrate",
   "category.transfers": "Trasferimenti",
