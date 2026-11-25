@@ -225,3 +225,12 @@ def test_an_oink_0_1_database_is_set_aside(tmp_path: Path) -> None:
         assert c.post("/api/auth/login", json=login).status_code == 200
         assert c.get("/api/me").json()["is_admin"]
     assert (tmp_path / "oink-0.1.db.bak").is_file()
+
+
+def test_a_revoked_token_disappears_from_the_list(owner: TestClient) -> None:
+    keep = owner.post("/api/tokens", json={"name": "Jarvis", "scopes": ["accounts:read"]}).json()
+    gone = owner.post("/api/tokens", json={"name": "old", "scopes": ["accounts:read"]}).json()
+    assert owner.delete(f"/api/tokens/{gone['id']}").status_code == 200
+    names = [t["name"] for t in owner.get("/api/tokens").json()]
+    assert names == ["Jarvis"] and keep["token"].startswith("oink_")
+    assert owner.get("/api/accounts", headers={"Authorization": f"Bearer {gone['token']}"}).status_code == 401

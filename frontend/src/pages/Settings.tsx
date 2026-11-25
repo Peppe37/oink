@@ -221,7 +221,7 @@ function AppsPanel() {
   const [chosen, setChosen] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
-  const load = () => api.tokens().then(setTokens);
+  const load = () => api.tokens().then((all) => setTokens(all.filter((tk) => !tk.revoked)));
   useEffect(() => { load(); api.scopes().then((s) => { setScopes(s); setChosen(s.filter((x) => x.endsWith(":read"))); }); }, []);
   const create = async (e: FormEvent) => {
     e.preventDefault();

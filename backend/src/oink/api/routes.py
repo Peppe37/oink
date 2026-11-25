@@ -339,7 +339,7 @@ def list_tokens(who: Caller = Depends(browser_only), db: Session = Depends(get_d
     return list(
         db.scalars(
             select(ApiToken)
-            .where(ApiToken.user_id == who.user_id)
+            .where(ApiToken.user_id == who.user_id, ApiToken.revoked.is_(False))
             .order_by(ApiToken.created.desc())
         )
     )
