@@ -196,3 +196,24 @@ def test_query_words_match_their_stems() -> None:
     assert docs.fts_query("Quanto è lo stipendio netto?") == '"stipend"* OR "netto"*'
     assert docs.fts_query("e il") == ""
     assert docs.chunks("a" * 3000)[0] and len(docs.chunks("x. " * 1000)) > 2
+
+
+def test_a_statement_of_an_unknown_account_proposes_it_filled_in(owner: TestClient) -> None:
+    body = (
+        "Intesa Sanpaolo - Estratto conto\nIBAN IT71X0306901600000000012345\n"
+        "Data;Descrizione;Importo\n02/11/2026;Versamento contanti;200,00\n03/11/2026;Giroconto a Revolut;-200,00\n"
+    )
+    doc = _upload(owner, "intesa-novembre.csv", body).json()
+    proposal = doc["facts"]["proposed_account"]
+    assert doc["import_note"] == "account_not_recognised"
+    assert (
+        proposal["institution"] == "Intesa Sanpaolo"
+        and proposal["iban"] == "IT71X0306901600000000012345"
+    )
+    assert proposal["movements"] == 2 and proposal["name"] == "Intesa Sanpaolo"
+    acc = owner.post(
+        "/api/accounts",
+        json={k: proposal[k] for k in ("name", "institution", "iban", "kind", "currency")},
+    ).json()
+    done = owner.post(f"/api/documents/{doc['id']}/import", json={"account_id": acc["id"]}).json()
+    assert done["import"]["added"] == 2 and "proposed_account" not in done["facts"]

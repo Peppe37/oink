@@ -424,3 +424,4 @@ select.field { appearance: none; background-image: linear-gradient(45deg, transp
 .chat-input .field { flex: 1; border-radius: 999px; }
 .icon-btn.send { background: linear-gradient(150deg, var(--pink), var(--pink-2)); color: #fff; flex: none; }
 .icon-btn.send:disabled { opacity: 0.45; }
+.new-account { display: grid; gap: 12px; padding: 16px; border-radius: 18px; background: color-mix(in srgb, var(--pink) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pink) 35%, transparent); }

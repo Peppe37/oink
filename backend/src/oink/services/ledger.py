@@ -119,6 +119,13 @@ def add_movements(
         db.add(tx)
         added.append(tx)
     db.commit()
+    if added:  # money moved between own accounts is not spending: pair the legs
+        from oink.core.db import User
+        from oink.services.transfers import WINDOW, match_transfers
+
+        user = db.get(User, account.user_id)
+        if user is not None:
+            match_transfers(db, user, since=min(t.day for t in added) - WINDOW)
     return AddResult(added=added, duplicates=duplicates)
 
 

@@ -78,8 +78,10 @@ from oink.services.ai import AI, AIError
 from oink.services.connections import banking, finish_bank, link_with_key, save_banking, sync
 from oink.services.importer import ImportError_, parse_statement
 from oink.services.jobs import categorize_pending, monthly_report
-from oink.services.ledger import CATEGORIES, NewMovement, add_movements, learn_rule
+from oink.services.ledger import CATEGORIES, INTERNAL, NewMovement, add_movements, learn_rule
 from oink.services.statements import MAX_FILE, apply, pick_account
+from oink.services.transfers import match_transfers, untracked
+from oink.services.transfers import unlink as unlink_transfer
 
 api = APIRouter(prefix="/api")
 MONTH = r"^\d{4}-\d{2}$"
@@ -539,6 +541,8 @@ def update_transaction(
     tx = _tx(db, who, tx_id)
     if body.category is not None:
         tx.category, tx.category_by = body.category.strip().lower(), "user"
+        if tx.category not in INTERNAL:
+            unlink_transfer(db, tx)  # not a transfer after all: free the other leg too
         if body.learn and tx.category:
             learn_rule(db, tx, tx.category)
     if body.note is not None:
@@ -554,12 +558,28 @@ def delete_transaction(
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
     tx = _tx(db, who, tx_id)
+    unlink_transfer(db, tx)
     account = db.get(Account, tx.account_id)
     if account is not None and account.source == "manual" and account.balance is not None:
         account.balance -= tx.amount
     db.delete(tx)
     db.commit()
     return {"ok": True}
+
+
+@api.get("/transfers/untracked")
+def untracked_transfers(
+    who: Caller = Depends(require("transactions:read")), db: Session = Depends(get_db)
+) -> list[dict[str, object]]:
+    """Money sent to own banks/brokers that are not in Oink yet (add them to see it)."""
+    return untracked(db, who.user)
+
+
+@api.post("/transfers/match")
+def rematch_transfers(
+    who: Caller = Depends(require("transactions:write")), db: Session = Depends(get_db)
+) -> dict[str, int]:
+    return {"paired": match_transfers(db, who.user)}
 
 
 @api.get("/categories")

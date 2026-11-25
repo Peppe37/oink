@@ -164,6 +164,7 @@ function TxSheet({ tx, onClose, onSaved, onDeleted }: { tx: Tx | null; onClose: 
         <div className={`big-amount num ${Number(tx.amount) > 0 ? "up" : ""}`}>{fmt.money(tx.amount, tx.currency, { sign: Number(tx.amount) > 0 })}</div>
         <div className="muted">{fmt.date(tx.day, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
         {tx.counterparty && tx.description !== tx.counterparty && <div className="faint small-text">{tx.description}</div>}
+        {tx.category_by === "transfer" && <div className="pill-note">{tx.transfer_id ? t("transfers.paired") : t("transfers.untracked")}</div>}
       </div>
       <h4 className="section-label">{t("movements.category")}</h4>
       <div className="cat-grid">

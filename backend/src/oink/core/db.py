@@ -191,10 +191,12 @@ class Transaction(Base):
     description: Mapped[str] = mapped_column(Text)
     counterparty: Mapped[str] = mapped_column(String(200), default="")
     category: Mapped[str] = mapped_column(String(40), default="")
-    category_by: Mapped[str] = mapped_column(String(8), default="")  # ""|rule|ai|user
+    category_by: Mapped[str] = mapped_column(String(8), default="")  # ""|rule|ai|user|transfer
     note: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(16), default="manual")  # manual|linked|import|api
     fingerprint: Mapped[str] = mapped_column(String(40))
+    #: the other leg of a transfer between own accounts (services/transfers.py)
+    transfer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

@@ -10,7 +10,7 @@ export type Account = {
 };
 export type Tx = {
   id: number; account_id: number; day: string; amount: string; currency: string; description: string;
-  counterparty: string; category: string; category_by: string; note: string; source: string;
+  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null;
 };
 export type Recurring = { name: string; monthly: number; last: number; increased: boolean; category: string; last_day: string };
 export type MonthSummary = {
@@ -63,11 +63,12 @@ export type Picture = {
 export type DocKind = "statement" | "payslip" | "contract" | "invoice" | "receipt" | "tax" | "insurance" | "investment" | "other";
 export type Doc = {
   id: number; kind: DocKind; title: string; filename: string; mime: string; size: number; summary: string; issuer: string;
-  date: string | null; facts: Record<string, string | number>; account_id: number | null; imported: number | null;
+  date: string | null; facts: Record<string, string | number> & { proposed_account?: ProposedAccount }; account_id: number | null; imported: number | null;
   import_note: string; source: string; created: string; has_text: boolean; text?: string;
 };
 export type DocUpload = Doc & { duplicate: boolean; import: ImportResult | null };
 export type DocSource = { n: number; document_id: number; title: string; date: string | null; snippet: string };
+export type ProposedAccount = { name: string; institution: string; iban: string; kind: string; currency: string; balance: string | null; movements: number; month: string };
 export type DocAnswer = { answer: string | null; sources: DocSource[]; ai: boolean };
 export type AISettings = { source: "app" | "env" | "off"; model: string; base_url: string; has_key: boolean; send_descriptions: boolean; providers: Record<string, { example: string; key: boolean }> };
 
@@ -129,6 +130,7 @@ export const api = {
   requests: () => call<StatementRequest[]>("/requests"),
   skipRequest: (id: number) => call(`/requests/${id}/skip`, { method: "POST" }),
 
+  untrackedTransfers: () => call<{ institution: string; currency: string; count: number; total: string; last: string }[]>("/transfers/untracked"),
   documents: (params: { kind?: string; q?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
   document: (id: number) => call<Doc>(`/documents/${id}`),
   uploadDocument: (file: File, opts: { kind?: string; accountId?: number } = {}) => {

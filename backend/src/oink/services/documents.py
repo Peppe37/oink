@@ -465,15 +465,98 @@ async def import_into(
     """Movements of a statement into its account; the reason is kept when it can't be done."""
     try:
         parsed = await parse_statement(doc.filename, raw, ai)
-        account = pick_account(db, user, parsed, account_id)
-        outcome = apply(db, account, parsed)
     except ImportError_ as exc:
         doc.import_note = exc.code
         return None
+    try:
+        account = pick_account(db, user, parsed, account_id)
+    except ImportError_ as exc:
+        doc.import_note = exc.code
+        if exc.code == "account_not_recognised":
+            # an account Oink doesn't know yet: propose it, filled in from the statement
+            doc.facts = {**(doc.facts or {}), "proposed_account": propose_account(doc, parsed)}
+        return None
+    outcome = apply(db, account, parsed)
+    facts = dict(doc.facts or {})
+    facts.pop("proposed_account", None)
+    doc.facts = facts
     doc.account_id, doc.imported, doc.import_note = account.id, outcome.added, ""
     if outcome.month and doc.doc_date is None:
         doc.doc_date = date.fromisoformat(f"{outcome.month}-01")
     return outcome
+
+
+#: Italian bank codes (ABI, in the IBAN) of the most common banks.
+ABI = {
+    "03069": "Intesa Sanpaolo",
+    "02008": "UniCredit",
+    "05387": "BPER Banca",
+    "01005": "BNL",
+    "01030": "Monte dei Paschi",
+    "05034": "Banco BPM",
+    "03015": "Fineco",
+    "07601": "Poste Italiane",
+    "03062": "Banca Mediolanum",
+}
+KNOWN = {
+    "revolut": "Revolut",
+    "trade republic": "Trade Republic",
+    "deblock": "Deblock",
+    "young platform": "Young Platform",
+    "intesa sanpaolo": "Intesa Sanpaolo",
+    "isybank": "Isybank",
+    "bper": "BPER Banca",
+    "unicredit": "UniCredit",
+    "fineco": "Fineco",
+    "n26": "N26",
+    "wise": "Wise",
+    "hype": "Hype",
+    "bunq": "bunq",
+    "scalable": "Scalable Capital",
+    "mediolanum": "Banca Mediolanum",
+    "bancoposta": "Poste Italiane",
+    "illimity": "illimity",
+    "paypal": "PayPal",
+    "klarna": "Klarna",
+    "kraken": "Kraken",
+    "satispay": "Satispay",
+}
+
+
+def propose_account(doc: Document, parsed: Any) -> dict[str, Any]:
+    """A new account filled in from the statement itself (deterministic: IBAN, bank code,
+    names printed on it, closing balance), for the person to check and confirm."""
+    iban = parsed.ibans[0] if len(parsed.ibans) == 1 else ""
+    institution = ""
+    if iban.startswith("IT") and len(iban) >= 10:
+        institution = ABI.get(iban[5:10], "")
+    head = f" {(doc.issuer + ' ' + doc.text[:3000]).lower()} "
+    if not institution:
+        institution = next((name for key, name in KNOWN.items() if f"{key}" in head), "")
+    if not institution and doc.issuer:
+        institution = doc.issuer[:120]
+    lowered = head
+    kind = (
+        "card"
+        if any(w in lowered for w in ("carta di credito", "credit card", "estratto carta"))
+        else (
+            "investment"
+            if any(w in lowered for w in ("dossier titoli", "depot", "portafoglio titoli"))
+            else "checking"
+        )
+    )
+    currency = next((c for c in ("EUR", "USD", "GBP", "CHF") if f" {c.lower()} " in lowered), "EUR")
+    name = institution or (f"Conto …{iban[-4:]}" if iban else doc.title[:60])
+    return {
+        "name": name,
+        "institution": institution,
+        "iban": iban,
+        "kind": kind,
+        "currency": currency,
+        "balance": None if parsed.balance is None else str(parsed.balance),
+        "movements": len(parsed.rows),
+        "month": parsed.month,
+    }
 
 
 def path_of(folder: Path, doc: Document) -> Path:

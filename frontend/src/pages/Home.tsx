@@ -14,6 +14,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   const { t, fmt } = useI18n();
   const errorText = useErrorText();
   const [data, setData] = useState<Overview | null>(null);
+  const [moved, setMoved] = useState<{ institution: string; currency: string; count: number; total: string }[]>([]);
+  useEffect(() => { api.untrackedTransfers().then(setMoved).catch(() => undefined); }, []);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
@@ -60,6 +62,17 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
           </Glass>
         </motion.div>
       )}
+
+      {moved.map((m) => (
+        <motion.div variants={rise} key={m.institution + m.currency}>
+          <Glass className="banner" variant="tight">
+            <span className="row" style={{ gap: 10 }}><Icon name="transfers" />
+              {m.institution === "?" ? t("transfers.toUnknown", { amount: fmt.money(m.total, m.currency) })
+                : t("transfers.toInstitution", { amount: fmt.money(m.total, m.currency), institution: m.institution })}</span>
+            <button className="btn ghost small" onClick={onAdd}>{t("transfers.add")}</button>
+          </Glass>
+        </motion.div>
+      ))}
 
       {!empty && (
         <div className="grid">

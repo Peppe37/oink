@@ -514,6 +514,18 @@ export const en = {
   "error.file_empty": "The file is empty.",
   "error.kind_unknown": "Unknown document type.",
   "error.file_missing": "The file is missing from the server.",
+  "transfers.paired": "Moved between your accounts: not spending",
+  "transfers.untracked": "Moved to one of your accounts that isn't in Oink yet",
+  "transfers.toInstitution": "You moved {amount} to {institution}, which isn't in Oink: add it to see all your money.",
+  "transfers.toUnknown": "You moved {amount} to one of your accounts that isn't in Oink: add it to see all your money.",
+  "transfers.add": "Add account",
+  "docs.newAccountFound": "This statement belongs to an account that isn't in Oink yet.",
+  "docs.newAccountTitle": "New account found",
+  "docs.newAccountHint_one": "One movement on an account Oink doesn't know yet: check the details read from the statement and add it.",
+  "docs.newAccountHint_other": "{count} movements on an account Oink doesn't know yet: check the details read from the statement and add it.",
+  "docs.newAccountBalance": "Closing balance: {amount}.",
+  "docs.newAccountName": "Account name",
+  "docs.newAccountCreate": "Add account and import",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

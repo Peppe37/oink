@@ -114,6 +114,7 @@ class TransactionOut(BaseModel):
     category_by: str
     note: str
     source: str
+    transfer_id: int | None = None
 
     @classmethod
     def of(cls, t: Transaction) -> TransactionOut:
@@ -128,6 +129,7 @@ class TransactionOut(BaseModel):
             category=t.category,
             category_by=t.category_by,
             note=t.note,
+            transfer_id=t.transfer_id,
             source=t.source,
         )
 

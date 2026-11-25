@@ -5,7 +5,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, type Account, type Doc, type DocKind, type DocSource } from "../api";
+import { api, type Account, type Doc, type DocKind, type DocSource, type ProposedAccount } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n, type Key } from "../i18n";
 import { Empty, Field, PageHeader, Row, Sheet, Spinner, rise, stagger } from "../ui/bits";
@@ -50,7 +50,8 @@ export function Documents({ ai, notify }: { ai: boolean; notify: (s: string) => 
       setBusy(file.name);
       try {
         const r = await api.uploadDocument(file);
-        if (r.duplicate) notify(t("docs.duplicate", { title: r.title }));
+        if (r.import_note === "account_not_recognised" && r.facts.proposed_account) { setOpen(r); notify(t("docs.newAccountFound")); }
+        else if (r.duplicate) notify(t("docs.duplicate", { title: r.title }));
         else if (r.import?.added) notify(t("docs.imported", { title: r.title, count: r.import.added }));
         else notify(t("docs.uploaded", { title: r.title }));
       } catch (e) {
@@ -241,11 +242,14 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
         </div>
         {!doc.has_text && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
         {doc.summary && <div><h4 className="section-label">{t("docs.summary")}</h4><p style={{ margin: 0 }}>{doc.summary}</p></div>}
-        {Object.keys(doc.facts).length > 0 && (
+        {doc.import_note === "account_not_recognised" && doc.facts.proposed_account && (
+          <NewAccountCard doc={doc} proposed={doc.facts.proposed_account} notify={notify} onDone={async () => onChanged(await api.document(doc.id))} />
+        )}
+        {Object.keys(doc.facts).filter((k) => k !== "proposed_account").length > 0 && (
           <div>
             <h4 className="section-label">{t("docs.facts")}</h4>
             <div className="list">
-              {Object.entries(doc.facts).map(([k, v]) => (
+              {Object.entries(doc.facts).filter(([k]) => k !== "proposed_account").map(([k, v]) => (
                 <div key={k} className="item"><span className="item-main"><span className="row-text"><span className="row-detail">{k.replace(/_/g, " ")}</span></span><span className="num">{String(v)}</span></span></div>
               ))}
             </div>
@@ -276,5 +280,43 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
         </div>
       </div>
     </Sheet>
+  );
+}
+
+/** A statement of an account Oink doesn't know: add it, filled in from the statement. */
+function NewAccountCard({ doc, proposed, notify, onDone }: { doc: Doc; proposed: ProposedAccount; notify: (s: string) => void; onDone: () => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [form, setForm] = useState(proposed);
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof ProposedAccount) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const create = async () => {
+    setBusy(true);
+    try {
+      const acc = await api.addAccount({ name: form.name, institution: form.institution, iban: form.iban, kind: form.kind, currency: form.currency });
+      const r = await api.importDocument(doc.id, acc.id);
+      notify(t("docs.imported", { title: acc.name, count: r.import?.added ?? 0 }));
+      onDone();
+    } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="new-account">
+      <p style={{ margin: 0 }}><strong>{t("docs.newAccountTitle")}</strong></p>
+      <p className="muted small-text" style={{ margin: 0 }}>
+        {t("docs.newAccountHint", { count: proposed.movements })}
+        {proposed.balance ? ` ${t("docs.newAccountBalance", { amount: fmt.money(proposed.balance, proposed.currency) })}` : ""}
+      </p>
+      <div className="two">
+        <Field label={t("docs.newAccountName")}><input className="field" value={form.name} onChange={set("name")} /></Field>
+        <Field label={t("docs.issuer")}><input className="field" value={form.institution} onChange={set("institution")} /></Field>
+        <Field label="IBAN"><input className="field mono" value={form.iban} onChange={set("iban")} /></Field>
+        <Field label={t("docs.kindLabel")}>
+          <select className="field" value={form.kind} onChange={set("kind")}>
+            {["checking", "savings", "card", "cash", "investment", "crypto"].map((k) => <option key={k} value={k}>{t(`accounts.kind.${k}` as Key)}</option>)}
+          </select>
+        </Field>
+      </div>
+      <button className="btn" onClick={create} disabled={busy || !form.name.trim()}>{busy ? <Spinner /> : <Icon name="plus" size={16} />} {t("docs.newAccountCreate")}</button>
+    </div>
   );
 }
