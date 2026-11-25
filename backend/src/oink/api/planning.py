@@ -1,0 +1,457 @@
+"""Investments, plans (PAC), simulations, fixed costs, risk profile and the AI advisor."""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from oink.api.deps import Caller, get_db, require
+from oink.core.db import FixedCost, Holding, Plan, Report, RiskProfile
+from oink.core.money import MoneyError, normalise_code
+from oink.services import planning
+from oink.services.ai import AI, AIError
+from oink.services.markets import MarketError, history, quote, search
+from oink.services.reports import Book
+from oink.services.simulate import (
+    MonteCarlo,
+    SimulationError,
+    backtest,
+    monthly_returns,
+    portfolio_returns,
+)
+
+router = APIRouter(prefix="/api")
+Kind = Literal["stock", "etf", "bond", "fund", "crypto", "index", "other"]
+Frequency = Literal["weekly", "monthly", "quarterly", "yearly"]
+
+
+def _dec(value: str | float | None, field: str) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value).replace(",", "."))
+    except InvalidOperation as exc:
+        raise HTTPException(422, f"{field}_invalid") from exc
+
+
+def _ai(request: Request) -> AI:
+    ai: AI = request.app.state.ai
+    return ai
+
+
+# -- market data -----------------------------------------------------------------------
+@router.get("/markets/search", dependencies=[Depends(require("reports:read"))])
+async def market_search(q: str = Query(min_length=1, max_length=60)) -> list[dict[str, str]]:
+    try:
+        return await search(q)
+    except MarketError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/markets/quote/{symbol}", dependencies=[Depends(require("reports:read"))])
+async def market_quote(symbol: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        q = await quote(db, symbol)
+    except MarketError as exc:
+        raise HTTPException(404 if str(exc) == "symbol_unknown" else 502, str(exc)) from exc
+    return {"symbol": q.symbol, "price": str(q.price), "currency": q.currency, "name": q.name,
+            "updated": q.updated}  # fmt: skip
+
+
+@router.get("/markets/history/{symbol}", dependencies=[Depends(require("reports:read"))])
+async def market_history(
+    symbol: str, years: int = Query(default=10, ge=1, le=40), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    try:
+        series = await history(db, symbol, years)
+    except MarketError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return [{"day": d.isoformat(), "close": float(c)} for d, c in series[-years * 12 :]]
+
+
+# -- holdings --------------------------------------------------------------------------
+class HoldingIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = ""
+    kind: Kind = "etf"
+    currency: str = ""
+    quantity: str | float
+    cost: str | float | None = None
+    manual_price: str | float | None = None
+
+
+class HoldingPatch(BaseModel):
+    quantity: str | float | None = None
+    cost: str | float | None = None
+    manual_price: str | float | None = None
+    name: str | None = None
+
+
+@router.get("/holdings")
+async def holdings(
+    who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    return await planning.holdings_value(db, Book.of(db, who.user))
+
+
+@router.post("/holdings")
+async def add_holding(
+    body: HoldingIn, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    symbol = body.symbol.strip().upper()
+    currency, name = body.currency, body.name
+    if body.manual_price in (None, ""):
+        try:
+            q = await quote(db, symbol)
+            currency, name = currency or q.currency, name or q.name
+        except MarketError as exc:
+            raise HTTPException(422, "symbol_unknown") from exc
+    try:
+        currency = normalise_code(currency or "EUR")
+    except MoneyError as exc:
+        raise HTTPException(422, "currency_invalid") from exc
+    h = Holding(
+        user_id=who.user_id,
+        symbol=symbol,
+        name=(name or symbol)[:160],
+        kind=body.kind,
+        currency=currency,
+        quantity=_dec(body.quantity, "quantity") or Decimal(0),
+        cost=_dec(body.cost, "cost"),
+        manual_price=_dec(body.manual_price, "price"),
+    )
+    db.add(h)
+    db.commit()
+    return {"id": h.id}
+
+
+def _holding(db: Session, who: Caller, holding_id: int) -> Holding:
+    h = db.get(Holding, holding_id)
+    if h is None or h.user_id != who.user_id:
+        raise HTTPException(404, "holding_unknown")
+    return h
+
+
+@router.patch("/holdings/{holding_id}")
+def update_holding(
+    holding_id: int, body: HoldingPatch, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:  # fmt: skip
+    h = _holding(db, who, holding_id)
+    data = body.model_dump(exclude_unset=True)
+    for key in ("quantity", "cost", "manual_price"):
+        if key in data:
+            setattr(
+                h,
+                key,
+                _dec(data[key], key) if key != "quantity" else _dec(data[key], key) or Decimal(0),
+            )
+    if data.get("name"):
+        h.name = data["name"][:160]
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/holdings/{holding_id}")
+def delete_holding(
+    holding_id: int, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    db.delete(_holding(db, who, holding_id))
+    db.commit()
+    return {"ok": True}
+
+
+# -- plans (PAC) -----------------------------------------------------------------------
+class PlanIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = ""
+    amount: str | float
+    currency: str = "EUR"
+    frequency: Frequency = "monthly"
+    start: date
+    active: bool = True
+
+
+def _plan_out(p: Plan) -> dict[str, Any]:
+    return {"id": p.id, "symbol": p.symbol, "name": p.name, "amount": str(p.amount),
+            "currency": p.currency, "frequency": p.frequency, "start": p.start.isoformat(),
+            "active": p.active}  # fmt: skip
+
+
+@router.get("/plans")
+def plans(
+    who: Caller = Depends(require("accounts:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    return [_plan_out(p) for p in db.scalars(select(Plan).where(Plan.user_id == who.user_id))]
+
+
+@router.post("/plans")
+def add_plan(
+    body: PlanIn, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    amount = _dec(body.amount, "amount")
+    if amount is None or amount <= 0:
+        raise HTTPException(422, "amount_invalid")
+    try:
+        currency = normalise_code(body.currency)
+    except MoneyError as exc:
+        raise HTTPException(422, "currency_invalid") from exc
+    p = Plan(user_id=who.user_id, symbol=body.symbol.strip().upper(), name=body.name[:160],
+             amount=amount, currency=currency, frequency=body.frequency, start=body.start,
+             active=body.active)  # fmt: skip
+    db.add(p)
+    db.commit()
+    return _plan_out(p)
+
+
+@router.patch("/plans/{plan_id}")
+def update_plan(
+    plan_id: int, body: PlanIn, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    p = db.get(Plan, plan_id)
+    if p is None or p.user_id != who.user_id:
+        raise HTTPException(404, "plan_unknown")
+    p.symbol, p.name, p.frequency, p.start, p.active = (
+        body.symbol.strip().upper(),
+        body.name[:160],
+        body.frequency,
+        body.start,
+        body.active,
+    )
+    p.amount = _dec(body.amount, "amount") or p.amount
+    db.commit()
+    return _plan_out(p)
+
+
+@router.delete("/plans/{plan_id}")
+def delete_plan(
+    plan_id: int, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    p = db.get(Plan, plan_id)
+    if p is None or p.user_id != who.user_id:
+        raise HTTPException(404, "plan_unknown")
+    db.delete(p)
+    db.commit()
+    return {"ok": True}
+
+
+# -- simulations -----------------------------------------------------------------------
+class Asset(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    weight: float = Field(default=1, gt=0)
+
+
+class SimulationIn(BaseModel):
+    assets: list[Asset] = Field(min_length=1, max_length=10)
+    initial: float = Field(default=0, ge=0)
+    monthly: float = Field(default=0, ge=0)
+    years: int = Field(default=10, ge=1, le=60)
+    history_years: int = Field(default=20, ge=3, le=40)
+    method: Literal["bootstrap", "gbm"] = "bootstrap"
+    paths: int = Field(default=2000, ge=100, le=10000)
+    inflation: float = Field(default=0.02, ge=0, le=0.2)
+    target: float | None = None
+
+
+@router.post("/simulate", dependencies=[Depends(require("reports:read"))])
+async def simulate(body: SimulationIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Backtest on real history + Monte Carlo of the future, for a PAC, a lump sum or both,
+    on one asset or a weighted portfolio."""
+    if body.initial <= 0 and body.monthly <= 0:
+        raise HTTPException(422, "amount_invalid")
+    try:
+        series = [await history(db, a.symbol, body.history_years) for a in body.assets]
+    except MarketError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    try:
+        if len(series) == 1:
+            returns, past = monthly_returns(series[0]), series[0]
+        else:
+            returns = portfolio_returns(series, [a.weight for a in body.assets])
+            past = _portfolio_series(series, [a.weight for a in body.assets])
+        result = {
+            "backtest": backtest(past, body.monthly, body.initial),
+            "monte_carlo": MonteCarlo(
+                returns,
+                body.years,
+                body.initial,
+                body.monthly,
+                body.paths,
+                body.method,
+                body.inflation,
+                body.target,
+            ).run(),
+            "history_from": past[0][0].isoformat(),
+        }
+    except SimulationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return result
+
+
+def _portfolio_series(
+    series: list[list[tuple[date, Decimal]]], weights: list[float]
+) -> list[tuple[date, Decimal]]:
+    """An index (100 at start) of the monthly-rebalanced portfolio, for the backtest."""
+    maps = [dict(s) for s in series]
+    months = sorted(set.intersection(*(set(m) for m in maps)))
+    returns = portfolio_returns(series, weights)
+    level, out = Decimal(100), [(months[0], Decimal(100))]
+    for month, r in zip(months[1:], returns, strict=False):
+        level = level * Decimal(str(1 + r))
+        out.append((month, level))
+    return out
+
+
+# -- fixed costs -----------------------------------------------------------------------
+class FixedIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    amount: str | float
+    currency: str = "EUR"
+    frequency: Frequency = "monthly"
+    category: str = ""
+    next_due: date | None = None
+    match: str = ""
+    active: bool = True
+
+
+@router.get("/fixed-costs")
+def get_fixed(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    return planning.fixed_costs(db, Book.of(db, who.user))
+
+
+def _fixed_values(f: FixedCost, body: FixedIn) -> None:
+    amount = _dec(body.amount, "amount")
+    if amount is None or amount <= 0:
+        raise HTTPException(422, "amount_invalid")
+    try:
+        f.currency = normalise_code(body.currency)
+    except MoneyError as exc:
+        raise HTTPException(422, "currency_invalid") from exc
+    f.name, f.amount, f.frequency = body.name, abs(amount), body.frequency
+    f.category, f.next_due, f.match, f.active = (
+        body.category.strip().lower(),
+        body.next_due,
+        body.match.strip().lower(),
+        body.active,
+    )
+
+
+@router.post("/fixed-costs")
+def add_fixed(
+    body: FixedIn, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    f = FixedCost(user_id=who.user_id, name=body.name, amount=Decimal(0))
+    _fixed_values(f, body)
+    db.add(f)
+    db.commit()
+    return {"id": f.id}
+
+
+@router.put("/fixed-costs/{cost_id}")
+def update_fixed(
+    cost_id: int, body: FixedIn, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:  # fmt: skip
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    _fixed_values(f, body)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/fixed-costs/{cost_id}")
+def delete_fixed(
+    cost_id: int, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    db.delete(f)
+    db.commit()
+    return {"ok": True}
+
+
+# -- risk profile, the whole picture, advice -------------------------------------------
+class ProfileIn(BaseModel):
+    answers: dict[str, int]
+    horizon_years: int = Field(default=10, ge=1, le=60)
+    goals: str = Field(default="", max_length=2000)
+
+
+@router.get("/profile/risk")
+def get_risk(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    p = db.get(RiskProfile, who.user_id)
+    return {
+        "questions": list(planning.QUESTIONS),
+        "answers": p.answers if p else {},
+        "score": p.score if p else None,
+        "profile": planning.PROFILES.get(p.score) if p else None,
+        "horizon_years": p.horizon_years if p else 10,
+        "goals": p.goals if p else "",
+        "equity_share": planning.EQUITY_SHARE.get(p.score) if p else None,
+    }
+
+
+@router.put("/profile/risk")
+def set_risk(
+    body: ProfileIn, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    answers = {
+        k: min(5, max(1, int(v))) for k, v in body.answers.items() if k in planning.QUESTIONS
+    }
+    p = db.get(RiskProfile, who.user_id) or RiskProfile(user_id=who.user_id)
+    p.answers, p.score, p.horizon_years, p.goals = (
+        answers,
+        planning.score(answers),
+        body.horizon_years,
+        body.goals,
+    )
+    p.updated = datetime.now(UTC)
+    db.merge(p)
+    db.commit()
+    return get_risk(who, db)
+
+
+@router.get("/picture")
+async def picture(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """The whole picture: net worth, liquidity, investments, plans, fixed costs, lifestyle,
+    risk profile."""
+    return await planning.picture(db, Book.of(db, who.user))
+
+
+class AdviceIn(BaseModel):
+    focus: str = Field(default="", max_length=500)
+    language: str = Field(default="", max_length=8)
+
+
+@router.post("/advice")
+async def advice(
+    body: AdviceIn, request: Request, who: Caller = Depends(require("ai:ask")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    ai = _ai(request)
+    facts = await planning.picture(db, Book.of(db, who.user))
+    language = body.language or who.user.language or "en"
+    try:
+        content = await ai.advise(facts, language, body.focus)
+    except AIError as exc:
+        raise HTTPException(503, str(exc).split(":")[0]) from exc
+    report = Report(user_id=who.user_id, month=date.today().strftime("%Y-%m"), kind="advice",
+                    content=content, model=ai.config().model, language=language)  # fmt: skip
+    db.add(report)
+    db.commit()
+    return {"id": report.id, "content": content, "created": report.created}

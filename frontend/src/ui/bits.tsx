@@ -1,10 +1,10 @@
 /* Shared pieces: background, mascot, animated money, navigation (tab bar on phones,
    sidebar on large screens), sheets, toasts, list rows. */
 
-import { animate, AnimatePresence, motion, useDragControls, useMotionValue, useTransform, type PanInfo } from "framer-motion";
-import { useEffect, useState, type ReactNode } from "react";
+import { animate, AnimatePresence, motion, useDragControls, useMotionValue, useSpring, useTransform, type MotionValue, type PanInfo } from "framer-motion";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { NavLink, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Glass } from "../glass/Glass";
 import { useI18n, type Key } from "../i18n";
 import { Icon } from "./icons";
@@ -72,47 +72,78 @@ export function Money({ value, currency, className = "", sign = false, compact =
   return <motion.span className={`num ${className}`}>{text}</motion.span>;
 }
 
-const TABS: { to: string; label: Key; icon: string }[] = [
-  { to: "/", label: "nav.home", icon: "home" },
-  { to: "/activity", label: "nav.movements", icon: "activity" },
-  { to: "/accounts", label: "nav.accounts", icon: "wallet" },
-  { to: "/insights", label: "nav.reports", icon: "insights" },
-  { to: "/settings", label: "nav.settings", icon: "settings" },
+const TABS: { to: string; label: Key; icon: string; colors: [string, string] }[] = [
+  { to: "/", label: "nav.home", icon: "home", colors: ["#ff9ccc", "#e0468f"] },
+  { to: "/activity", label: "nav.movements", icon: "activity", colors: ["#8fd3ff", "#2f7fe8"] },
+  { to: "/accounts", label: "nav.accounts", icon: "wallet", colors: ["#b9a6ff", "#6a4fe6"] },
+  { to: "/invest", label: "nav.invest", icon: "investments", colors: ["#7ff0c9", "#0f9e7c"] },
+  { to: "/insights", label: "nav.reports", icon: "insights", colors: ["#ffd27a", "#f08a1c"] },
+  { to: "/settings", label: "nav.settings", icon: "settings", colors: ["#c9c6d6", "#6f6a85"] },
 ];
 
-/** Phones: a glass tab bar at the bottom, above the home indicator.
- *  Large screens: a glass sidebar. */
+/** The dock, like a Mac's: glass shelf at the bottom, icons that swell as the pointer (or a
+ *  finger sliding along it) gets close, bounce when opened, a dot under the open section. */
 export function Navigation() {
   const { t } = useI18n();
   const { pathname } = useLocation();
-  const wide = useWide();
+  const navigate = useNavigate();
+  const wide = useWide(700);
+  const pointer = useMotionValue(Infinity);
+  const [bounce, setBounce] = useState<string | null>(null);
+  const base = wide ? 50 : 44;
+  const peak = wide ? 78 : 60;
   const active = (to: string) => (to === "/" ? pathname === "/" : pathname.startsWith(to));
-  if (wide) {
-    return (
-      <Glass className="sidebar" refract strength={30} initial={{ x: -40, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 240, damping: 28 }}>
-        <div className="brand"><Pig size={36} /><span>Oink</span></div>
-        <nav>
-          {TABS.map((tab) => (
-            <NavLink key={tab.to} to={tab.to} className={active(tab.to) ? "active" : ""}>
-              {active(tab.to) && <motion.span layoutId="nav-bubble" className="bubble" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
-              <Icon name={tab.icon} />
-              <span>{t(tab.label)}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </Glass>
-    );
-  }
+  const open = (to: string) => {
+    setBounce(to);
+    setTimeout(() => setBounce(null), 700);
+    navigate(to);
+  };
   return (
-    <Glass className="tabbar" refract strength={34} initial={{ y: 90 }} animate={{ y: 0 }} transition={{ type: "spring", stiffness: 260, damping: 30, delay: 0.1 }}>
-      {TABS.map((tab) => (
-        <NavLink key={tab.to} to={tab.to} className={active(tab.to) ? "active" : ""} aria-label={t(tab.label)}>
-          {active(tab.to) && <motion.span layoutId="nav-bubble" className="bubble" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
-          <Icon name={tab.icon} size={24} />
-          <span>{t(tab.label)}</span>
-        </NavLink>
-      ))}
-    </Glass>
+    <nav className="dock-wrap" aria-label="Oink">
+      <Glass refract strength={46} variant="tight" className="dock"
+        onPointerMove={(e) => pointer.set(e.clientX)}
+        onPointerLeave={() => pointer.set(Infinity)}
+        onTouchMove={(e) => pointer.set(e.touches[0].clientX)}
+        onTouchEnd={() => pointer.set(Infinity)}
+        initial={{ y: 120, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 220, damping: 24, delay: 0.1 }}>
+        {TABS.map((tab) => (
+          <DockIcon key={tab.to} pointer={pointer} base={base} peak={peak} label={t(tab.label)} icon={tab.icon}
+            colors={tab.colors} active={active(tab.to)} bouncing={bounce === tab.to} onOpen={() => open(tab.to)} />
+        ))}
+      </Glass>
+    </nav>
+  );
+}
+
+function DockIcon({ pointer, base, peak, label, icon, colors, active, bouncing, onOpen }: {
+  pointer: MotionValue<number>; base: number; peak: number; label: string; icon: string; colors: [string, string];
+  active: boolean; bouncing: boolean; onOpen: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const distance = useTransform(pointer, (x) => {
+    const box = ref.current?.getBoundingClientRect();
+    return box ? x - (box.left + box.width / 2) : Infinity;
+  });
+  const target = useTransform(distance, [-base * 2.6, 0, base * 2.6], [base, peak, base]);
+  const size = useSpring(target, { stiffness: 340, damping: 22, mass: 0.35 });
+  const [hover, setHover] = useState(false);
+  return (
+    <motion.button ref={ref} className={`dock-item ${active ? "active" : ""}`} aria-label={label} aria-current={active ? "page" : undefined}
+      style={{ width: size, height: size }} onClick={onOpen}
+      onHoverStart={() => setHover(true)} onHoverEnd={() => setHover(false)}
+      animate={bouncing ? { y: [0, -22, 0, -8, 0] } : { y: 0 }} transition={{ duration: 0.65, ease: "easeOut" }}>
+      <AnimatePresence>
+        {hover && (
+          <motion.span className="dock-label" initial={{ opacity: 0, y: 6, x: "-50%" }} animate={{ opacity: 1, y: 0, x: "-50%" }} exit={{ opacity: 0, y: 4, x: "-50%" }}>
+            {label}
+          </motion.span>
+        )}
+      </AnimatePresence>
+      <span className="dock-tile" style={{ background: `linear-gradient(150deg, ${colors[0]}, ${colors[1]})` }}>
+        <Icon name={icon} size={22} stroke={1.9} style={{ width: "50%", height: "50%" }} />
+      </span>
+      <motion.i className="dock-dot" animate={{ opacity: active ? 1 : 0, scale: active ? 1 : 0.4 }} />
+    </motion.button>
   );
 }
 

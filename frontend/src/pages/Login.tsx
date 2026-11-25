@@ -6,6 +6,7 @@ import { api } from "../api";
 import { Glass } from "../glass/Glass";
 import { LANGUAGES, deviceLanguage, useErrorText, useI18n, type Lang } from "../i18n";
 import { Field, Pig, Spinner } from "../ui/bits";
+import { Icon } from "../ui/icons";
 
 const COMMON = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "PLN", "CZK"];
 
@@ -25,7 +26,7 @@ function Card({ title, hint, children }: { title: string; hint?: string; childre
   );
 }
 
-export function Login({ firstRun, onDone, onLanguage }: { firstRun: boolean; onDone: () => void; onLanguage: (l: Lang) => void }) {
+export function Login({ firstRun, onDone, onLanguage, sso, passwordLogin }: { firstRun: boolean; onDone: () => void; onLanguage: (l: Lang) => void; sso: string | null; passwordLogin: boolean }) {
   const { t, lang } = useI18n();
   const errorText = useErrorText();
   const [username, setUsername] = useState("");
@@ -51,7 +52,13 @@ export function Login({ firstRun, onDone, onLanguage }: { firstRun: boolean; onD
 
   return (
     <Card title={firstRun ? t("auth.setupTitle") : "Oink"} hint={firstRun ? t("auth.setupHint") : undefined}>
-      <form onSubmit={submit} className="stack">
+      {sso && (
+        <div className="stack" style={{ marginBottom: 16 }}>
+          <a className="btn big-btn" href="/api/auth/oidc/start"><Icon name="key" size={18} /> {t("auth.sso", { name: sso })}</a>
+          {passwordLogin && <div className="divider"><span>{t("auth.or")}</span></div>}
+        </div>
+      )}
+      {(passwordLogin || firstRun) && <form onSubmit={submit} className="stack">
         <Field label={t("auth.username")}>
           <input className="field" autoComplete="username" autoCapitalize="none" value={username} onChange={(e) => setUsername(e.target.value)} required />
         </Field>
@@ -74,7 +81,8 @@ export function Login({ firstRun, onDone, onLanguage }: { firstRun: boolean; onD
         )}
         {error && <motion.div className="error" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>{error}</motion.div>}
         <button className="btn big-btn" disabled={busy}>{busy ? <Spinner /> : firstRun ? t("auth.create") : t("auth.signIn")}</button>
-      </form>
+      </form>}
+      {new URLSearchParams(window.location.search).get("sso") === "error" && <div className="error" style={{ marginTop: 12 }}>{t("auth.ssoError")}</div>}
     </Card>
   );
 }

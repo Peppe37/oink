@@ -11,7 +11,17 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from oink.core.config import get_settings
-from oink.core.db import Account, Database, Rate, Report, Transaction
+from oink.core.db import (
+    Account,
+    Database,
+    FixedCost,
+    Holding,
+    Plan,
+    Rate,
+    Report,
+    RiskProfile,
+    Transaction,
+)
 from oink.core.security import create_user
 from oink.services.ledger import NewMovement, add_movements
 
@@ -129,6 +139,21 @@ def run() -> None:
                 ),
             )
         )
+        s.add_all([
+            Holding(user_id=uid, symbol="VWCE.DE", name="Vanguard FTSE All-World UCITS ETF", kind="etf",
+                    currency="EUR", quantity=Decimal("42"), cost=Decimal("4650")),
+            Holding(user_id=uid, symbol="AAPL", name="Apple Inc.", kind="stock", currency="USD",
+                    quantity=Decimal("6"), cost=Decimal("1020")),
+            Holding(user_id=uid, symbol="BTP-2033", name="BTP 4.35% 2033", kind="bond", currency="EUR",
+                    quantity=Decimal("20"), cost=Decimal("2000"), manual_price=Decimal("103.2")),
+            Plan(user_id=uid, symbol="VWCE.DE", name="Vanguard FTSE All-World", amount=Decimal("200"),
+                 currency="EUR", frequency="monthly", start=date(2024, 1, 1)),
+            FixedCost(user_id=uid, name="Rent", amount=Decimal("650"), category="home", match="rent"),
+            FixedCost(user_id=uid, name="Car insurance", amount=Decimal("540"), frequency="yearly", category="car"),
+            FixedCost(user_id=uid, name="Enel Energia", amount=Decimal("68"), category="bills", match="enel"),
+            RiskProfile(user_id=uid, answers={"horizon": 4, "drop": 3, "experience": 3, "income": 4, "goal": 3},
+                        score=3, horizon_years=15, goals="Buy a house in 6 years"),
+        ])  # fmt: skip
         s.commit()
     print("Demo ready: user «demo», password «demo-password».")
 

@@ -125,10 +125,12 @@ def auth_status(request: Request, db: Session = Depends(get_db)) -> dict[str, An
     return {
         "configured": user_count(db) > 0,
         "user": user_out(user).model_dump(mode="json") if user else None,
-        "ai": s.ai_enabled,
+        "ai": ai_of(request).enabled,
         "ai_reads_text": ai_of(request).can_read_text,
         "banking": banking(db, s) is not None,
         "version": updates.current_version(),
+        "sso": s.oidc_name if request.app.state.oidc.enabled else None,
+        "password_login": s.password_login or not request.app.state.oidc.enabled,
     }
 
 
@@ -171,6 +173,9 @@ def setup(
 def login(
     body: Login, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict[str, bool]:
+    s = settings_of(request)
+    if not s.password_login and request.app.state.oidc.enabled:
+        raise HTTPException(403, "sso_only")
     user = authenticate(db, body.username, body.password)
     if user is None:
         raise HTTPException(401, "wrong_credentials")
@@ -637,14 +642,20 @@ def summary(
 
 
 @api.get("/reports/overview")
-def overview(
+async def overview(
     who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     """Everything the home screen needs in one call."""
+    from oink.services.planning import holdings_value
+
     book = rep.Book.of(db, who.user)
+    invest = await holdings_value(db, book, refresh=False)
+    worth = rep.net_worth(book)
+    worth["investments"] = invest["total"]
+    worth["total"] = round(worth["total"] + invest["total"], 2)
     return {
         "currency": book.base,
-        "net_worth": rep.net_worth(book),
+        "net_worth": worth,
         "month": rep.compare(book, current_month()),
         "series": rep.series(book, 12),
         "balance": rep.balance_history(book, 180),
@@ -705,7 +716,7 @@ async def ask(
     facts = rep.facts_for_ai(
         rep.Book.of(db, who.user),
         body.month or current_month(),
-        with_text=settings_of(request).ai_send_descriptions,
+        with_text=ai_of(request).config().send_descriptions,
     )
     try:
         answer = await ai_of(request).answer(
@@ -722,9 +733,12 @@ def providers(
     request: Request, who: Caller = Depends(caller), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     """What can be linked, for the «add account» wizard."""
+    from oink.providers.directory import DIRECTORY
+
     return {
         "banking": banking(db, settings_of(request)) is not None,
         "countries": COUNTRIES,
+        "directory": DIRECTORY,
         "keyed": [
             {
                 "id": p.id,
@@ -882,7 +896,10 @@ async def system(
     info: dict[str, Any] = {"version": updates.current_version()}
     if who.browser and who.user.is_admin:
         info["updates"] = await updates.status(settings)
-        info["ai_model"] = settings.ai_model
+        info["ai_model"] = ai_of(request).config().model
+        info["mcp_url"] = public(request, "/mcp")
+        info["api_docs"] = public(request, "/api/docs")
+        info["sso"] = request.app.state.oidc.enabled
         info["banking"] = banking(db, settings) is not None
         info["callback_url"] = public(request, "/api/connections/callback")
         info["inbox"] = str(settings.inbox_dir)

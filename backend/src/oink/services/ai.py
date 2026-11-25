@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from oink.core.config import Settings
@@ -22,32 +23,70 @@ class AIError(RuntimeError):
     pass
 
 
+#: Providers offered in the app (LiteLLM prefixes). Any other LiteLLM model id works too.
+PROVIDERS = {
+    "openai": {"example": "openai/gpt-5.4-mini", "key": True},
+    "anthropic": {"example": "anthropic/claude-sonnet-5-5", "key": True},
+    "gemini": {"example": "gemini/gemini-2.5-flash", "key": True},
+    "mistral": {"example": "mistral/mistral-medium-latest", "key": True},
+    "deepseek": {"example": "deepseek/deepseek-chat", "key": True},
+    "groq": {"example": "groq/llama-3.3-70b-versatile", "key": True},
+    "openrouter": {"example": "openrouter/openai/gpt-5.4-mini", "key": True},
+    "ollama": {"example": "ollama/llama3.1", "key": False},
+}
+AI_KEYS = ("ai.model", "ai.base_url", "ai.api_key", "ai.send_descriptions")
+
+
+@dataclass
+class AIConfig:
+    model: str
+    base_url: str
+    api_key: str  # "" = the provider's usual environment variable
+    send_descriptions: bool
+    source: str  # "app" | "env"
+
+
 class AI:
-    def __init__(self, settings: Settings) -> None:
+    """`store` (optional) returns the admin's settings from the app, which win over .env."""
+
+    def __init__(self, settings: Settings, store: Any = None) -> None:
         self.settings = settings
+        self.store = store
+
+    def config(self) -> AIConfig:
+        if self.store is not None:
+            found: AIConfig | None = self.store()
+            if found is not None and found.model:
+                return found
+        s = self.settings
+        return AIConfig(s.ai_model, s.ai_base_url, "", s.ai_send_descriptions, "env")
 
     @property
     def enabled(self) -> bool:
-        return self.settings.ai_enabled
+        return bool(self.config().model)
 
     @property
     def can_read_text(self) -> bool:
         """Statements and descriptions may be sent to the provider."""
-        return self.enabled and self.settings.ai_send_descriptions
+        cfg = self.config()
+        return bool(cfg.model) and cfg.send_descriptions
 
     async def complete(self, system: str, user: str, *, as_json: bool = False) -> str:
-        if not self.enabled:
+        cfg = self.config()
+        if not cfg.model:
             raise AIError("ai_off")
         import litellm  # heavy import: only when AI is used
 
         kwargs: dict[str, Any] = {}
-        if self.settings.ai_base_url:
-            kwargs["api_base"] = self.settings.ai_base_url
+        if cfg.base_url:
+            kwargs["api_base"] = cfg.base_url
+        if cfg.api_key:
+            kwargs["api_key"] = cfg.api_key
         if as_json:
             kwargs["response_format"] = {"type": "json_object"}
         try:
             response = await litellm.acompletion(
-                model=self.settings.ai_model,
+                model=cfg.model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 timeout=120,
                 **kwargs,
@@ -102,6 +141,24 @@ class AI:
             " review, 4) three concrete, measurable tips. Use only the numbers you receive, never"
             " invent any. Amounts are in the user's base currency. Clear, friendly, no jargon.",
             json.dumps(facts, ensure_ascii=False, default=str),
+        )
+
+    async def advise(self, picture: dict[str, Any], language: str, focus: str = "") -> str:
+        """Personal money plan from the whole picture (computed by Oink)."""
+        return await self.complete(
+            f"You are a careful, independent personal finance coach. Write in "
+            f"{LANG.get(language, 'English')}, in Markdown, for this person only, using ONLY the "
+            "facts given (numbers in their main currency). Cover: 1) where they stand (net worth, "
+            "liquidity, emergency fund in months, savings rate, fixed costs vs income); 2) how to "
+            "split income (needs / wants / saving & investing) given how they actually live; "
+            "3) investing: whether their plans (PAC) and holdings fit their risk profile and "
+            "horizon, diversification, costs, what to do next with concrete monthly amounts; "
+            "4) risks to fix first (debts, no emergency fund, concentration, crypto share); "
+            "5) three to five concrete, measurable steps. If the risk questionnaire is missing, "
+            "say so and keep advice general. Never promise returns; mention that simulations "
+            "are not forecasts. No single-stock picks. Be warm, direct, no jargon."
+            + (f" The user especially asks about: {focus}" if focus else ""),
+            json.dumps(picture, ensure_ascii=False, default=str),
         )
 
     async def answer(self, question: str, facts: dict[str, Any], language: str) -> str:

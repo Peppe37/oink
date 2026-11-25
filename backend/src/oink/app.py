@@ -13,9 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from oink.api.admin import ai_store
+from oink.api.admin import router as admin_router
+from oink.api.mcp import router as mcp_router
+from oink.api.planning import router as planning_router
 from oink.api.routes import api
 from oink.core.config import Settings, get_settings
 from oink.core.db import Database
+from oink.core.oidc import OIDC
 from oink.core.security import Vault, create_user, user_count
 from oink.services import jobs, updates
 from oink.services.ai import AI
@@ -67,9 +72,14 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
     )
-    app.state.settings, app.state.db, app.state.ai = settings, db, AI(settings)
+    app.state.settings, app.state.db = settings, db
+    app.state.ai = AI(settings, ai_store(db.sessions, vault))
     app.state.vault = vault
+    app.state.oidc = OIDC(settings)
     app.include_router(api)
+    app.include_router(planning_router)
+    app.include_router(admin_router)
+    app.include_router(mcp_router)
 
     @app.middleware("http")
     async def headers(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -83,7 +93,7 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
 
         @app.get("/{path:path}", include_in_schema=False, response_model=None)
         async def spa(path: str) -> FileResponse | JSONResponse:
-            if path.startswith("api/"):
+            if path.startswith("api/") or path == "mcp":
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             file = (STATIC / path).resolve()
             if path and file.is_file() and STATIC.resolve() in file.parents:

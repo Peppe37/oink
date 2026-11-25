@@ -3,11 +3,12 @@
 import { motion } from "framer-motion";
 import { useEffect, useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, type Report } from "../api";
+import { api, type Picture, type Report } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { Empty, PageHeader, Spinner, rise, stagger } from "../ui/bits";
 import { Icon } from "../ui/icons";
+import { AdviceCard, FixedCard, PictureCard, RiskCard } from "./Plan";
 
 export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => void }) {
   const { t, fmt, lang } = useI18n();
@@ -18,7 +19,9 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
   const [answer, setAnswer] = useState("");
   const [asking, setAsking] = useState(false);
 
-  useEffect(() => { api.reports().then(setReports).catch((e) => notify(errorText(e))); }, [notify, errorText]);
+  const [picture, setPicture] = useState<Picture | null>(null);
+  const loadPicture = () => { api.picture().then(setPicture).catch(() => undefined); };
+  useEffect(() => { api.reports().then((r) => setReports(r.filter((x) => x.kind !== "advice"))).catch((e) => notify(errorText(e))); loadPicture(); }, [notify, errorText]);
 
   const generate = async () => {
     setBusy(true);
@@ -49,6 +52,13 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
   return (
     <motion.div className="page" variants={stagger} initial="hidden" animate="show">
       <PageHeader title={t("reports.title")} action={ai ? <button className="btn" onClick={generate} disabled={busy}>{busy ? <><Spinner /> {t("reports.generating")}</> : <><Icon name="sparkle" size={18} /> <span className="hide-xs">{t("reports.generate")}</span></>}</button> : undefined} />
+
+      <motion.div variants={rise}><PictureCard picture={picture} /></motion.div>
+      <motion.div variants={rise}><AdviceCard ai={ai} notify={notify} /></motion.div>
+      <div className="grid">
+        <motion.div variants={rise} className="span-7"><FixedCard notify={notify} /></motion.div>
+        <motion.div variants={rise} className="span-5"><RiskCard onSaved={loadPicture} /></motion.div>
+      </div>
 
       {!ai && <motion.div variants={rise}><Glass className="banner" variant="tight"><span className="row" style={{ gap: 10 }}><Icon name="sparkle" /> {t("reports.aiOff")}</span></Glass></motion.div>}
 

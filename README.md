@@ -41,6 +41,20 @@ month. Any AI provider works, or none at all.
   them into words.
 - **An API for your other apps** with scoped tokens (read and write are separate), so an
   assistant can read your spending without being able to change anything. Docs at `/api/docs`.
+- **Investments, with real market data**: ETFs, stocks, bonds, funds and crypto priced from
+  Yahoo Finance (free, no key), accumulation plans (PAC), and a **simulator**: the plan on
+  real history (backtest) and thousands of possible futures (Monte Carlo, block bootstrap
+  of the asset's own returns or a normal model), for one asset or a weighted portfolio.
+- **A personal money plan**: fixed costs (also suggested from your movements), a five-question
+  risk profile, the whole picture (liquidity, emergency fund in months, saving rate,
+  investments, plans) and AI advice built on it: how to split your income, what fits your
+  profile, what to fix first.
+- **AI configured from the app**: the admin picks provider, model and key (stored
+  encrypted); `.env` still works.
+- **Single sign-on**: any OpenID Connect provider (Keycloak, Authentik, Google…), with
+  admins from a group; password sign-in can be turned off.
+- **MCP server** at `/mcp`: plug Oink into Claude, ChatGPT or any MCP assistant with a scoped
+  token (the assistant gets only the tools its scopes allow).
 - **Updates in one click**: when a new release is out, the admin sees it and can press
   *Install and restart*. The database migrates itself.
 - **English, Italiano, Deutsch, Français, Español**: your device's language by default.
@@ -106,6 +120,23 @@ The admin does this once, in the app: **Settings → Bank access**.
 
 From then on everyone links their banks from **Accounts → Add account → Bank**. Consents last
 up to 180 days; Oink syncs every `OINK_SYNC_HOURS` (6 by default).
+
+## Single sign-on (Keycloak and friends)
+
+Create an OpenID Connect client (confidential or public with PKCE) with redirect URI
+`<OINK_PUBLIC_URL>/api/auth/oidc/callback`, then set `OINK_OIDC_ISSUER` (for Keycloak
+`https://<host>/realms/<realm>`), `OINK_OIDC_CLIENT_ID`, `OINK_OIDC_CLIENT_SECRET`. Members of
+`OINK_OIDC_ADMIN_GROUP` (group or realm role) are admins. Existing users can link their
+account from Settings → Profile.
+
+## Connect an AI assistant over MCP
+
+Create a token in **Settings → Connected apps**, then point the assistant at `<OINK_PUBLIC_URL>/mcp`:
+
+```json
+{ "mcpServers": { "oink": { "type": "http", "url": "https://oink.example.com/mcp",
+  "headers": { "Authorization": "Bearer oink_…" } } } }
+```
 
 ## Connect another app (e.g. an AI assistant)
 

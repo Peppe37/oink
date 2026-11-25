@@ -29,6 +29,7 @@ class UserOut(Out):
     base_currency: str
     disabled: bool
     created: datetime
+    sso: bool = False
 
 
 class UserIn(BaseModel):
@@ -243,4 +244,6 @@ class Ask(BaseModel):
 
 
 def user_out(u: User) -> UserOut:
-    return UserOut.model_validate(u)
+    out = UserOut.model_validate(u)
+    out.sso = bool(u.oidc_sub)
+    return out

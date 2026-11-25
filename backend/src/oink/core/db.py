@@ -93,6 +93,9 @@ class User(Base):
     base_currency: Mapped[str] = mapped_column(String(10), default="EUR")
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+    # single sign-on (OpenID Connect: Keycloak, Authentik, Google…): the provider's subject
+    oidc_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    email: Mapped[str] = mapped_column(String(255), default="")
 
 
 class Invite(Base):
@@ -241,6 +244,95 @@ class Rate(Base):
     updated: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 
+class Holding(Base):
+    """A position in a security or a coin: shares of an ETF, a bond, BTC on a hardware wallet.
+    Priced from market data (`services/markets.py`) by its `symbol` (Yahoo Finance style:
+    «VWCE.DE», «AAPL», «BTC-EUR»)."""
+
+    __tablename__ = "holdings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(160), default="")
+    kind: Mapped[str] = mapped_column(String(16), default="etf")  # stock|etf|bond|fund|crypto
+    currency: Mapped[str] = mapped_column(String(10), default="EUR")
+    quantity: Mapped[Decimal] = mapped_column(DecimalText(), default=Decimal(0))
+    cost: Mapped[Decimal | None] = mapped_column(DecimalText(), nullable=True)  # total paid
+    manual_price: Mapped[Decimal | None] = mapped_column(DecimalText(), nullable=True)
+    created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
+class Plan(Base):
+    """An accumulation plan (PAC): `amount` into `symbol` every period from `start`."""
+
+    __tablename__ = "plans"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(160), default="")
+    amount: Mapped[Decimal] = mapped_column(DecimalText())
+    currency: Mapped[str] = mapped_column(String(10), default="EUR")
+    frequency: Mapped[str] = mapped_column(
+        String(12), default="monthly"
+    )  # weekly|monthly|quarterly
+    start: Mapped[date] = mapped_column(Date)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
+class Price(Base):
+    """Monthly closing prices (history for backtests and simulations), cached."""
+
+    __tablename__ = "prices"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    close: Mapped[Decimal] = mapped_column(DecimalText())
+
+
+class Quote(Base):
+    """The latest price of a symbol."""
+
+    __tablename__ = "quotes"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    price: Mapped[Decimal] = mapped_column(DecimalText())
+    currency: Mapped[str] = mapped_column(String(10), default="")
+    name: Mapped[str] = mapped_column(String(160), default="")
+    updated: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
+class FixedCost(Base):
+    """A cost that comes back every period: rent, insurance, phone, gym, mortgage…"""
+
+    __tablename__ = "fixed_costs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    amount: Mapped[Decimal] = mapped_column(DecimalText())  # positive, per period
+    currency: Mapped[str] = mapped_column(String(10), default="EUR")
+    frequency: Mapped[str] = mapped_column(
+        String(12), default="monthly"
+    )  # monthly|quarterly|yearly|weekly
+    category: Mapped[str] = mapped_column(String(40), default="")
+    next_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+    match: Mapped[str] = mapped_column(String(120), default="")  # text that finds its payments
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
+class RiskProfile(Base):
+    """The user's answers to the risk questionnaire and their goals."""
+
+    __tablename__ = "risk_profiles"
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    answers: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    score: Mapped[int] = mapped_column(Integer, default=3)  # 1 cautious … 5 aggressive
+    horizon_years: Mapped[int] = mapped_column(Integer, default=10)
+    goals: Mapped[str] = mapped_column(Text, default="")
+    updated: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
 class Database:
     def __init__(self, url: str) -> None:
         self.url = url
@@ -274,10 +366,16 @@ __all__ = [
     "Connection",
     "Database",
     "Engine",
+    "FixedCost",
+    "Holding",
     "Invite",
     "LoginSession",
+    "Plan",
+    "Price",
+    "Quote",
     "Rate",
     "Report",
+    "RiskProfile",
     "Rule",
     "Setting",
     "StatementRequest",

@@ -96,14 +96,14 @@ async def monthly_report(
     db: Session, ai: AI, user: User, month: str, settings: Settings, language: str = ""
 ) -> Report:
     language = language or user.language or "en"
-    facts = facts_for_ai(Book.of(db, user), month, with_text=settings.ai_send_descriptions)
+    facts = facts_for_ai(Book.of(db, user), month, with_text=ai.config().send_descriptions)
     content = await ai.monthly_report(facts, language)
     report = Report(
         user_id=user.id,
         month=month,
         kind="monthly",
         content=content,
-        model=settings.ai_model,
+        model=ai.config().model,
         language=language,
     )
     db.add(report)
@@ -111,10 +111,24 @@ async def monthly_report(
     return report
 
 
+async def refresh_quotes(db: Session) -> int:
+    """Latest prices of every symbol someone holds (cached 15 minutes by markets.quote)."""
+    from oink.core.db import Holding
+    from oink.services.markets import MarketError, quote
+
+    done = 0
+    for symbol in set(db.scalars(select(Holding.symbol).where(Holding.manual_price.is_(None)))):
+        with contextlib.suppress(MarketError):
+            await quote(db, symbol)
+            done += 1
+    return done
+
+
 async def daily(sessions: sessionmaker[Session], settings: Settings, ai: AI) -> None:
     today = datetime.now(ZoneInfo(settings.timezone)).date()
     with sessions() as db:
         await fx.refresh(db, fx.currencies_in_use(db))
+        await refresh_quotes(db)
         open_statement_requests(db, today, settings.statement_day)
         month = previous_months(today.strftime("%Y-%m"), 1)[0]
         for user in db.scalars(select(User).where(User.disabled.is_(False))):

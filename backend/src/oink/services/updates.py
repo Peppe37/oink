@@ -82,10 +82,17 @@ def updater_alive(folder: Path) -> bool:
         return False
 
 
+def _write(path: Path, data: dict[str, Any]) -> None:
+    """Write by replacing: the updater (root) owns the old file, Oink owns the folder."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
+
+
 def request_update(folder: Path, target: str) -> None:
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "request.json").write_text(json.dumps({"version": target, "at": int(time.time())}))
-    (folder / "status.json").write_text(json.dumps({"state": "requested", "version": target}))
+    _write(folder / "request.json", {"version": target, "at": int(time.time())})
+    _write(folder / "status.json", {"state": "requested", "version": target})
 
 
 def update_state(folder: Path) -> dict[str, Any]:

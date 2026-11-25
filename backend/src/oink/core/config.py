@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     )
     session_days: int = 30
 
+    # Single sign-on (OpenID Connect: Keycloak, Authentik, Google…). Empty issuer = off.
+    oidc_issuer: str = Field(default="", description="e.g. https://sso.example.com/realms/home")
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_name: str = Field(default="SSO", description="Label of the sign-in button.")
+    oidc_scopes: str = "openid profile email"
+    oidc_admin_group: str = Field(default="", description="Group or role that makes admins.")
+    oidc_auto_create: bool = Field(default=True, description="Create accounts on first login.")
+    password_login: bool = Field(default=True, description="False = only SSO sign-in.")
+
     # Updates: the app checks GitHub releases; "Install and restart" needs the updater
     # sidecar (see docker-compose.yml).
     update_check: bool = True

@@ -290,6 +290,27 @@ function AddAccount({ open, onClose, onDone }: { open: boolean; onClose: () => v
   );
 }
 
+function Directory({ providers, onSearch }: { providers: Providers; onSearch: (country: string, q: string) => void }) {
+  const { t } = useI18n();
+  const [picked, setPicked] = useState<string>("");
+  const entry = providers.directory.find((d) => d.name === picked);
+  return (
+    <div className="stack">
+      <h4 className="section-label">{t("wizard.popular")}</h4>
+      <div className="chips wrap-chips">
+        {providers.directory.filter((d) => d.method !== "key").map((d) => (
+          <button key={d.name} className={`chip ${picked === d.name ? "on" : ""}`}
+            onClick={() => { setPicked(d.name); if (d.search && d.method !== "statement") onSearch(d.country, d.search); }}>{d.name}</button>
+        ))}
+      </div>
+      {entry && (
+        <p className="note"><Icon name={entry.method === "statement" ? "upload" : "bank"} size={18} />
+          <span>{t(`wizard.method.${entry.method}` as never)}{entry.export ? ` — ${t("wizard.export", { how: entry.export })}` : ""}</span></p>
+      )}
+    </div>
+  );
+}
+
 function BankStep({ providers }: { providers: Providers | null }) {
   const { t } = useI18n();
   const errorText = useErrorText();
@@ -306,7 +327,7 @@ function BankStep({ providers }: { providers: Providers | null }) {
     api.banks(country).then(setBanks).catch((e) => setError(errorText(e)));
   }, [providers, country, errorText]);
   if (!providers) return <Spinner />;
-  if (!providers.banking) return <p className="muted">{t("wizard.bankOff")}</p>;
+  if (!providers.banking) return <div className="stack"><p className="muted">{t("wizard.bankOff")}</p><Directory providers={providers} onSearch={() => undefined} /></div>;
   const shown = (banks ?? []).filter((b) => b.name.toLowerCase().includes(q.toLowerCase())).slice(0, 60);
   const go = async (bank: string) => {
     setGoing(bank);
@@ -320,6 +341,7 @@ function BankStep({ providers }: { providers: Providers | null }) {
   };
   return (
     <div className="stack">
+      <Directory providers={providers} onSearch={(c, text) => { if (c) setCountry(c); setQ(text); }} />
       <div className="two">
         <Field label={t("wizard.country")}>
           <select className="field" value={country} onChange={(e) => setCountry(e.target.value)}>

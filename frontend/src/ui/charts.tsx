@@ -143,3 +143,72 @@ export function Donut({ data, total, currency }: { data: [string, number][]; tot
     </div>
   );
 }
+
+/** Monte Carlo fan: 5–95 and 25–75 percentile bands, the median, and what was put in. */
+export function FanChart({ bands, invested, currency, height = 220 }: { bands: { year: number; p5: number; p25: number; p50: number; p75: number; p95: number }[]; invested: (year: number) => number; currency: string; height?: number }) {
+  const { t, fmt } = useI18n();
+  const width = 600;
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(...bands.map((b) => b.p95), invested(bands.length - 1)) * 1.05 || 1;
+  const x = (i: number) => (i / Math.max(1, bands.length - 1)) * width;
+  const y = (v: number) => height - 6 - (v / max) * (height - 16);
+  const area = (lo: keyof (typeof bands)[number], hi: keyof (typeof bands)[number]) =>
+    `M${bands.map((b, i) => `${x(i)},${y(b[hi] as number)}`).join(" L")} L${[...bands].reverse().map((b, i) => `${x(bands.length - 1 - i)},${y(b[lo] as number)}`).join(" L")} Z`;
+  const shown = hover ?? bands.length - 1;
+  const b = bands[shown];
+  return (
+    <div>
+      <div className="row between wrap small-text" style={{ marginBottom: 6, gap: 8 }}>
+        <span className="muted">{t("invest.year", { n: b.year })}</span>
+        <span className="row" style={{ gap: 12 }}>
+          <span className="num"><i className="swatch" style={{ background: "var(--pink-2)" }} />{fmt.money(b.p50, currency, { compact: true })}</span>
+          <span className="num faint">{fmt.money(b.p5, currency, { compact: true })} – {fmt.money(b.p95, currency, { compact: true })}</span>
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none" className="chart"
+        onPointerMove={(e) => { const box = e.currentTarget.getBoundingClientRect(); setHover(Math.max(0, Math.min(bands.length - 1, Math.round(((e.clientX - box.left) / box.width) * (bands.length - 1))))); }}
+        onPointerLeave={() => setHover(null)} role="img" aria-label={t("invest.future")}>
+        <motion.path d={area("p5", "p95")} fill="var(--violet)" opacity={0.22} initial={{ opacity: 0 }} animate={{ opacity: 0.22 }} transition={{ duration: 0.8 }} />
+        <motion.path d={area("p25", "p75")} fill="var(--pink)" opacity={0.3} initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} transition={{ duration: 0.8, delay: 0.2 }} />
+        <motion.path d={`M${bands.map((bb, i) => `${x(i)},${y(bb.p50)}`).join(" L")}`} fill="none" stroke="var(--pink-2)" strokeWidth="2.5" vectorEffect="non-scaling-stroke"
+          initial={{ pathLength: 0 } as never} animate={{ pathLength: 1 } as never} transition={{ duration: 1.2 }} />
+        <path d={`M${bands.map((_, i) => `${x(i)},${y(invested(i))}`).join(" L")}`} fill="none" stroke="var(--fg-3)" strokeDasharray="5 5" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        <line x1={x(shown)} x2={x(shown)} y1={0} y2={height} stroke="var(--line)" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  );
+}
+
+/** Two lines over time: what was invested and what it was worth. */
+export function GrowthChart({ points, currency, height = 180 }: { points: { day: string; invested: number; value: number }[]; currency: string; height?: number }) {
+  const { fmt, t } = useI18n();
+  const width = 600;
+  const [hover, setHover] = useState<number | null>(null);
+  if (points.length < 2) return null;
+  const max = Math.max(...points.map((p) => Math.max(p.value, p.invested))) * 1.05 || 1;
+  const x = (i: number) => (i / (points.length - 1)) * width;
+  const y = (v: number) => height - 6 - (v / max) * (height - 16);
+  const line = (k: "value" | "invested") => `M${points.map((p, i) => `${x(i)},${y(p[k])}`).join(" L")}`;
+  const shown = hover ?? points.length - 1;
+  const p = points[shown];
+  return (
+    <div>
+      <div className="row between wrap small-text" style={{ marginBottom: 6, gap: 8 }}>
+        <span className="muted">{fmt.date(p.day, { month: "short", year: "numeric" })}</span>
+        <span className="row" style={{ gap: 12 }}>
+          <span className="num"><i className="swatch" style={{ background: "var(--mint)" }} />{fmt.money(p.value, currency, { compact: true })}</span>
+          <span className="num faint">{t("invest.invested")} {fmt.money(p.invested, currency, { compact: true })}</span>
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none" className="chart"
+        onPointerMove={(e) => { const box = e.currentTarget.getBoundingClientRect(); setHover(Math.max(0, Math.min(points.length - 1, Math.round(((e.clientX - box.left) / box.width) * (points.length - 1))))); }}
+        onPointerLeave={() => setHover(null)} role="img" aria-label={t("invest.past")}>
+        <defs><linearGradient id="growth" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--mint)" stopOpacity="0.35" /><stop offset="1" stopColor="var(--mint)" stopOpacity="0" /></linearGradient></defs>
+        <path d={`${line("value")} L${width},${height} L0,${height} Z`} fill="url(#growth)" />
+        <motion.path d={line("value")} fill="none" stroke="var(--mint)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" initial={{ pathLength: 0 } as never} animate={{ pathLength: 1 } as never} transition={{ duration: 1.2 }} />
+        <path d={line("invested")} fill="none" stroke="var(--fg-3)" strokeDasharray="5 5" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        <line x1={x(shown)} x2={x(shown)} y1={0} y2={height} stroke="var(--line)" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  );
+}

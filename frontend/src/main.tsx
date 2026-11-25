@@ -8,6 +8,7 @@ import { Accounts } from "./pages/Accounts";
 import { Activity } from "./pages/Activity";
 import { Home } from "./pages/Home";
 import { Insights } from "./pages/Insights";
+import { Invest } from "./pages/Invest";
 import { Invite, Login } from "./pages/Login";
 import { Settings } from "./pages/Settings";
 import { UpdatePrompt, useUpdate } from "./pages/Update";
@@ -19,7 +20,7 @@ function Shell() {
   const [offline, setOffline] = useState(false);
   const [lang, setLang] = useState<Lang>(() => resolveLanguage(null));
   const refresh = useCallback(() => {
-    api.status().then((s) => { setStatus(s); setOffline(false); setLang(resolveLanguage(s.user?.language)); }).catch(() => setOffline(true));
+    api.status().then((s) => { window.__oinkSSO = s.sso; setStatus(s); setOffline(false); setLang(resolveLanguage(s.user?.language)); }).catch(() => setOffline(true));
   }, []);
   useEffect(refresh, [refresh]);
   const location = useLocation();
@@ -33,7 +34,7 @@ function Shell() {
       ) : !status ? null : invite && !status.user ? (
         <Invite token={invite} onDone={refresh} />
       ) : !status.user ? (
-        <Login firstRun={!status.configured} onDone={refresh} onLanguage={setLang} />
+        <Login firstRun={!status.configured} onDone={refresh} onLanguage={setLang} sso={status.sso} passwordLogin={status.password_login} />
       ) : (
         <App status={status} onStatus={refresh} onLanguage={setLang} />
       )}
@@ -62,6 +63,7 @@ function App({ status, onStatus, onLanguage }: { status: Status; onStatus: () =>
               <Route path="/" element={<Home user={user} onAdd={addAccount} />} />
               <Route path="/activity" element={<Activity ai={status.ai_reads_text} notify={notify} />} />
               <Route path="/accounts" element={<Accounts notify={notify} adding={adding} setAdding={setAdding} baseCurrency={user.base_currency} />} />
+              <Route path="/invest" element={<Invest notify={notify} currency={user.base_currency} />} />
               <Route path="/insights" element={<Insights ai={status.ai} notify={notify} />} />
               <Route path="/settings" element={<Settings user={user} notify={notify} onLogout={onStatus} onUpdate={() => setShowUpdate(true)}
                 onUser={(u) => { onLanguage(resolveLanguage(u.language)); onStatus(); }} />} />

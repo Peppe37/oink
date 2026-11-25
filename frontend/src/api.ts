@@ -2,8 +2,8 @@
    decimal strings in their own currency; reports are numbers in the user's main currency.
    Errors carry a short code (translated with useErrorText). */
 
-export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string };
-export type Status = { configured: boolean; user: User | null; ai: boolean; ai_reads_text: boolean; banking: boolean; version: string };
+export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string; sso: boolean };
+export type Status = { configured: boolean; user: User | null; ai: boolean; ai_reads_text: boolean; banking: boolean; version: string; sso: string | null; password_login: boolean };
 export type Account = {
   id: number; name: string; kind: string; institution: string; iban: string; currency: string; source: string;
   balance: string | null; balance_at: string | null; color: string; archived: boolean; connection_id: number | null;
@@ -19,7 +19,7 @@ export type MonthSummary = {
 };
 export type Overview = {
   currency: string;
-  net_worth: { currency: string; total: number; accounts: { id: number; name: string; kind: string; value: number | null }[]; missing_rates: string[] };
+  net_worth: { currency: string; total: number; investments?: number; accounts: { id: number; name: string; kind: string; value: number | null }[]; missing_rates: string[] };
   month: { currency: string; current: MonthSummary; usual_spending: number | null; usual_income: number | null;
            categories: Record<string, { now: number; usual: number; delta: number }> };
   series: { month: string; income: number; spending: number }[];
@@ -33,13 +33,34 @@ export type Connection = { id: number; provider: string; label: string; status: 
 export type StatementRequest = { id: number; account_id: number; month: string; status: string; created: string };
 export type ProviderField = { name: string; secret: boolean; placeholder: string };
 export type KeyedProvider = { id: string; name: string; kind: "exchange" | "wallet" | "fintech" | "bank"; docs: string; movements: boolean; fields: ProviderField[] };
-export type Providers = { banking: boolean; countries: string[]; keyed: KeyedProvider[] };
+export type DirectoryEntry = { name: string; country: string; method: "psd2" | "psd2_or_statement" | "statement" | "key"; search: string; export?: string };
+export type Providers = { banking: boolean; countries: string[]; keyed: KeyedProvider[]; directory: DirectoryEntry[] };
 export type ImportResult = { account_id: number; added: number; duplicates: number; month: string; by_ai: boolean; estimated: boolean; balance_updated: boolean; request_closed: boolean };
 export type UpdateInfo = {
   current: string; latest: { version: string; notes: string; url: string } | null; update_available: boolean; can_install: boolean;
   state: { state?: string; version?: string };
 };
-export type SystemInfo = { version: string; updates?: UpdateInfo; ai_model?: string; banking?: boolean; callback_url?: string; inbox?: string };
+export type SystemInfo = { version: string; updates?: UpdateInfo; ai_model?: string; banking?: boolean; callback_url?: string; inbox?: string; mcp_url?: string; api_docs?: string; sso?: boolean };
+export type HoldingItem = { id: number; symbol: string; name: string; kind: string; quantity: string; price: string | null; currency: string; value: number | null; cost: number | null; gain: number | null; stale: boolean };
+export type Holdings = { currency: string; total: number; cost: number; gain: number | null; by_kind: Record<string, number>; items: HoldingItem[] };
+export type PlanItem = { id: number; symbol: string; name: string; amount: string; currency: string; frequency: string; start: string; active: boolean };
+export type SearchHit = { symbol: string; name: string; kind: string; exchange: string };
+export type Band = { year: number; p5: number; p25: number; p50: number; p75: number; p95: number };
+export type Simulation = {
+  history_from: string;
+  backtest: { points: { day: string; invested: number; value: number }[]; invested: number; value: number; gain: number; return: number | null; asset_cagr: number; max_drawdown: number; years: number };
+  monte_carlo: { bands: Band[]; invested: number; median: number; p5: number; p95: number; prob_loss: number; prob_target?: number; yearly_vol: number; paths: number; method: string };
+};
+export type FixedItem = { id: number; name: string; amount: string; currency: string; frequency: string; category: string; next_due: string | null; match: string; active: boolean; per_month: number | null };
+export type FixedCosts = { currency: string; monthly: number; yearly: number; items: FixedItem[]; suggestions: Recurring[] };
+export type Risk = { questions: string[]; answers: Record<string, number>; score: number | null; profile: string | null; horizon_years: number; goals: string; equity_share: number | null };
+export type Picture = {
+  currency: string; net_worth: number; cash_and_accounts: number; liquid: number; investments: number; investments_by_kind: Record<string, number>;
+  emergency_months: number | null; fixed_costs_monthly: number; fixed_share_of_income: number | null; plans_monthly: number;
+  lifestyle: { months: number; income?: number; spending?: number; saving_rate?: number | null; essential_share?: number | null };
+  risk: { score: number | null; profile: string | null; horizon_years: number | null; suggested_equity_share: number | null };
+};
+export type AISettings = { source: "app" | "env" | "off"; model: string; base_url: string; has_key: boolean; send_descriptions: boolean; providers: Record<string, { example: string; key: boolean }> };
 
 export class ApiError extends Error {
   constructor(public status: number, code: string) { super(code); }
@@ -122,6 +143,28 @@ export const api = {
   patchUser: (id: number, body: Partial<Pick<User, "is_admin" | "disabled" | "name">>) => call<User>(`/users/${id}`, { method: "PATCH", body: json(body) }),
   deleteUser: (id: number) => call(`/users/${id}`, { method: "DELETE" }),
 
+  holdings: () => call<Holdings>("/holdings"),
+  addHolding: (body: { symbol: string; name?: string; kind: string; currency?: string; quantity: string; cost?: string; manual_price?: string }) => call<{ id: number }>("/holdings", { method: "POST", body: json(body) }),
+  patchHolding: (id: number, body: { quantity?: string; cost?: string | null; manual_price?: string | null }) => call(`/holdings/${id}`, { method: "PATCH", body: json(body) }),
+  deleteHolding: (id: number) => call(`/holdings/${id}`, { method: "DELETE" }),
+  plans: () => call<PlanItem[]>("/plans"),
+  addPlan: (body: Omit<PlanItem, "id">) => call<PlanItem>("/plans", { method: "POST", body: json(body) }),
+  deletePlan: (id: number) => call(`/plans/${id}`, { method: "DELETE" }),
+  search: (q: string) => call<SearchHit[]>(`/markets/search?${query({ q })}`),
+  simulate: (body: { assets: { symbol: string; weight: number }[]; initial: number; monthly: number; years: number; method: string; inflation: number; target?: number | null }) =>
+    call<Simulation>("/simulate", { method: "POST", body: json(body) }),
+  fixed: () => call<FixedCosts>("/fixed-costs"),
+  addFixed: (body: { name: string; amount: string; currency: string; frequency: string; category?: string; next_due?: string | null; match?: string }) => call("/fixed-costs", { method: "POST", body: json(body) }),
+  deleteFixed: (id: number) => call(`/fixed-costs/${id}`, { method: "DELETE" }),
+  risk: () => call<Risk>("/profile/risk"),
+  setRisk: (body: { answers: Record<string, number>; horizon_years: number; goals: string }) => call<Risk>("/profile/risk", { method: "PUT", body: json(body) }),
+  picture: () => call<Picture>("/picture"),
+  advice: (focus: string, language: string) => call<{ id: number; content: string; created: string }>("/advice", { method: "POST", body: json({ focus, language }) }),
+  aiSettings: () => call<AISettings>("/system/ai"),
+  setAI: (body: { model: string; base_url: string; api_key?: string | null; send_descriptions: boolean }) => call<AISettings>("/system/ai", { method: "PUT", body: json(body) }),
+  resetAI: () => call<AISettings>("/system/ai", { method: "DELETE" }),
+  testAI: () => call<{ reply: string }>("/system/ai/test", { method: "POST" }),
+  unlinkSSO: () => call("/auth/oidc/unlink", { method: "POST" }),
   system: () => call<SystemInfo>("/system"),
   installUpdate: () => call<{ ok: boolean; version: string }>("/system/update", { method: "POST" }),
   setBanking: (app_id: string, private_key: string) => call("/system/banking", { method: "PUT", body: json({ app_id, private_key }) }),

@@ -9,10 +9,14 @@ the UI speaks English, Italian, German, French and Spanish (default: the device'
   migrate = Alembic at startup), `providers/` (Enable Banking redirect flow; keyed providers:
   Wise, Kraken, Binance, Bitcoin/Ethereum addresses), `services/` (ledger with dedupe and
   rules, importer CSV/OFX/PDF + IBAN detection, statements + inbox, fx rates, reports =
-  numbers, ai = LiteLLM, connections, updates, jobs = background loop), `api/routes.py`.
+  numbers, ai = LiteLLM (config from the app wins over env), connections, updates, markets =
+  Yahoo chart/search, simulate = backtest + Monte Carlo, planning = fixed costs, lifestyle,
+  risk, the whole picture; jobs = background loop), `api/routes.py`, `api/planning.py`,
+  `api/admin.py` (SSO, AI settings), `api/mcp.py` (MCP server), `core/oidc.py`.
 - `frontend/` React + Vite + framer-motion. `src/glass/Glass.tsx` is the glass material
   (SVG displacement lens in backdrop-filter, frosted fallback): keep the visual language.
-  Phone first (tab bar, sheets); sidebar from 900 px. Icons are our own (`src/ui/icons.tsx`):
+  Phone first (sheets); navigation is a macOS-style dock (`Navigation` in `ui/bits.tsx`).
+  Glass with `refract` refracts on Safari too (aurora copy + SVG lens, see `Glass.tsx`). Icons are our own (`src/ui/icons.tsx`):
   no emoji in the UI. Every string goes through `t()` with a key in ALL five `src/i18n/*.ts`.
 - Every row with money has `user_id` and every query filters on `Caller.user_id`: users never
   see each other's data (tests cover it).

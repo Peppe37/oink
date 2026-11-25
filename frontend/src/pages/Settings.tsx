@@ -3,13 +3,13 @@
 
 import { motion } from "framer-motion";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, type SystemInfo, type Token, type User } from "../api";
+import { api, type AISettings, type SystemInfo, type Token, type User } from "../api";
 import { Glass } from "../glass/Glass";
 import { LANGUAGES, useErrorText, useI18n } from "../i18n";
 import { Field, PageHeader, Row, Sheet, Spinner, rise, stagger } from "../ui/bits";
 import { Icon, Tile } from "../ui/icons";
 
-type Panel = "profile" | "password" | "apps" | "users" | "bank" | "system" | null;
+type Panel = "profile" | "password" | "apps" | "users" | "bank" | "system" | "ai" | "mcp" | null;
 
 export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: User; onUser: (u: User) => void; onLogout: () => void; notify: (s: string) => void; onUpdate: () => void }) {
   const { t, lang } = useI18n();
@@ -36,12 +36,14 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
           {item("profile", "user", ["#ff8cc0", "#c94b8c"], t("settings.profile"), `${LANGUAGES[lang]} · ${user.base_currency}`)}
           {item("password", "key", ["#ffd76a", "#f2a71b"], t("settings.security"))}
           {item("apps", "link", ["#6cc9ff", "#2f86e8"], t("settings.apps"))}
+          {item("mcp", "sparkle", ["#cf95ff", "#9550e8"], t("settings.mcp"))}
         </Glass>
       </motion.div>
       {user.is_admin && (
         <motion.div variants={rise}>
           <Glass className="card list group">
             {item("users", "users", ["#a08bff", "#6a4fe6"], t("settings.users"))}
+            {item("ai", "insights", ["#ffd27a", "#f08a1c"], t("settings.ai"), system?.ai_model || t("settings.aiOff"))}
             {item("bank", "bank", ["#43e5b5", "#0fa37f"], t("settings.bank"), system?.banking ? t("settings.bankReady") : undefined)}
             {item("system", "download", ["#b3aec2", "#7c7690"], t("settings.system"),
               update?.update_available ? <span className="accent">{t("settings.updateAvailable", { version: update.latest?.version ?? "" })}</span> : `${t("settings.version")} ${system?.version ?? ""}`)}
@@ -60,6 +62,8 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
       <Sheet open={panel === "apps"} onClose={close} title={t("settings.apps")} wide><AppsPanel /></Sheet>
       <Sheet open={panel === "users"} onClose={close} title={t("settings.users")} wide><UsersPanel me={user} /></Sheet>
       <Sheet open={panel === "bank"} onClose={close} title={t("settings.bank")}><BankPanel system={system} onDone={() => { notify(t("settings.bankSaved")); api.system().then(setSystem); close(); }} /></Sheet>
+      <Sheet open={panel === "ai"} onClose={close} title={t("settings.ai")}><AIPanel notify={notify} onSaved={() => api.system().then(setSystem)} /></Sheet>
+      <Sheet open={panel === "mcp"} onClose={close} title={t("settings.mcp")} wide><MCPPanel system={system} /></Sheet>
       <Sheet open={panel === "system"} onClose={close} title={t("settings.system")}><SystemPanel system={system} onUpdate={() => { close(); onUpdate(); }} /></Sheet>
     </motion.div>
   );
@@ -87,12 +91,90 @@ function ProfilePanel({ user, onUser }: { user: User; onUser: (u: User) => void 
           {Object.entries(LANGUAGES).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
         </select>
       </Field>
+      {window.__oinkSSO && (
+        <div className="row between note">
+          <span>{user.sso ? t("settings.ssoLinked", { name: window.__oinkSSO }) : t("settings.ssoNotLinked", { name: window.__oinkSSO })}</span>
+          {user.sso ? <button type="button" className="btn ghost small" onClick={() => api.unlinkSSO().then(() => window.location.reload()).catch((e) => setError(errorText(e)))}>{t("accounts.unlink")}</button>
+            : <a className="btn ghost small" href="/api/auth/oidc/start?link=true">{t("settings.ssoLink")}</a>}
+        </div>
+      )}
       <Field label={t("settings.baseCurrency")} hint={t("settings.baseCurrencyHint")}>
         <select className="field" value={currency} onChange={(e) => setCurrency(e.target.value)}>{currencies.map((c) => <option key={c}>{c}</option>)}</select>
       </Field>
       {error && <div className="error">{error}</div>}
       <button className="btn big-btn">{t("common.save")}</button>
     </form>
+  );
+}
+
+function AIPanel({ notify, onSaved }: { notify: (s: string) => void; onSaved: () => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [cfg, setCfg] = useState<AISettings | null>(null);
+  const [provider, setProvider] = useState("openai");
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [send, setSend] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.aiSettings().then((c) => {
+      setCfg(c); setModel(c.model); setBaseUrl(c.base_url); setSend(c.send_descriptions);
+      const p = c.model.split("/")[0];
+      if (p in c.providers) setProvider(p);
+    }).catch((e) => setError(errorText(e)));
+  }, [errorText]);
+  if (!cfg) return <Spinner />;
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setError("");
+    try {
+      setCfg(await api.setAI({ model, base_url: baseUrl, api_key: key ? key : null, send_descriptions: send }));
+      setKey(""); onSaved();
+      const r = await api.testAI();
+      notify(t("settings.aiWorks", { reply: r.reply }));
+    } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
+  };
+  return (
+    <form className="stack" onSubmit={save}>
+      <p className="muted">{t("settings.aiHint")}</p>
+      {cfg.source !== "off" && <p className="note"><Icon name="check" size={18} /> {t(cfg.source === "app" ? "settings.aiFromApp" : "settings.aiFromEnv", { model: cfg.model })}</p>}
+      <div className="chips">
+        {Object.keys(cfg.providers).map((p) => (
+          <button type="button" key={p} className={`chip ${provider === p ? "on" : ""}`} onClick={() => { setProvider(p); setModel(cfg.providers[p].example); }}>{p}</button>
+        ))}
+      </div>
+      <Field label={t("settings.aiModel")} hint={t("settings.aiModelHint")}><input className="field mono" value={model} onChange={(e) => setModel(e.target.value)} required placeholder={cfg.providers[provider]?.example} /></Field>
+      {cfg.providers[provider]?.key !== false && (
+        <Field label={t("settings.aiKey")} hint={cfg.has_key ? t("settings.aiKeySaved") : undefined}>
+          <input className="field mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={cfg.has_key ? "••••••••" : "sk-…"} />
+        </Field>
+      )}
+      <Field label={`${t("settings.aiBaseUrl")} (${t("common.optional")})`}><input className="field mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={provider === "ollama" ? "http://ollama:11434" : ""} /></Field>
+      <label className="check"><input type="checkbox" checked={send} onChange={(e) => setSend(e.target.checked)} /> {t("settings.aiSend")}</label>
+      {error && <div className="error">{error}</div>}
+      <button className="btn big-btn" disabled={busy}>{busy ? <Spinner /> : t("settings.aiSaveTest")}</button>
+      {cfg.source === "app" && <button type="button" className="btn ghost" onClick={async () => { setCfg(await api.resetAI()); onSaved(); }}>{t("settings.aiReset")}</button>}
+    </form>
+  );
+}
+
+function MCPPanel({ system }: { system: SystemInfo | null }) {
+  const { t } = useI18n();
+  const origin = window.location.origin;
+  const mcp = system?.mcp_url ?? `${origin}/mcp`;
+  const snippet = JSON.stringify({ mcpServers: { oink: { type: "http", url: mcp, headers: { Authorization: "Bearer oink_…" } } } }, null, 2);
+  return (
+    <div className="stack">
+      <p className="muted">{t("settings.mcpHint")}</p>
+      <h4 className="section-label">MCP</h4>
+      <Secret value={mcp} />
+      <pre className="secret code">{snippet}</pre>
+      <h4 className="section-label">REST API</h4>
+      <p className="small-text muted">{t("settings.apiHint")}</p>
+      <a className="link" href={system?.api_docs ?? "/api/docs"} target="_blank" rel="noreferrer"><Icon name="globe" size={16} /> {t("settings.apiDocs")}</a>
+      <p className="small-text">{t("settings.mcpToken")}</p>
+    </div>
   );
 }
 
