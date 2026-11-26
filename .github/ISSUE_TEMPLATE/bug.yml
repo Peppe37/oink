@@ -1,0 +1,13 @@
+name: Bug report
+description: Something doesn't work
+body:
+  - type: input
+    attributes: { label: Oink version, description: shown at the bottom of Settings }
+    validations: { required: true }
+  - type: textarea
+    attributes: { label: What happened, description: What you expected and what you saw. Remove amounts, names and IBANs from anything you paste. }
+    validations: { required: true }
+  - type: textarea
+    attributes: { label: How to reproduce }
+  - type: textarea
+    attributes: { label: Logs, description: "`docker compose logs oink --tail 100` (no secrets)", render: shell }

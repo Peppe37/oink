@@ -26,13 +26,14 @@
     :root { --bg:#0c0b10; --fg:#f5f5f7; --muted:#a1a1a6; --card:rgba(30,28,38,.55); --line:rgba(255,255,255,.1); --accent:#ff6aa8; --accent2:#9b84ff; --rim:rgba(255,255,255,.14); --shadow:0 24px 60px -24px rgba(0,0,0,.8); }
   }
   * { box-sizing:border-box; }
-  html { scroll-behavior:smooth; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; overflow-x:hidden; }
+  html { scroll-behavior:smooth; overflow-x:clip; -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; overflow-x:clip; min-width:0; }
+  img, svg, video { max-width:100%; height:auto; }
   a { color:var(--accent); }
   main, footer, .topbar { max-width:1040px; margin:0 auto; padding-left:16px; padding-right:16px; position:relative; z-index:1; }
 
   /* aurora: soft blobs behind everything, like the app */
-  .aurora { position:fixed; inset:-20vmax; z-index:0; pointer-events:none; opacity:.55; }
+  .aurora { position:fixed; inset:0; overflow:hidden; z-index:0; pointer-events:none; opacity:.55; }
   .aurora i { position:absolute; width:55vmax; height:55vmax; border-radius:50%; filter:blur(0); background:radial-gradient(closest-side, var(--c), transparent 70%); animation:drift 26s ease-in-out infinite alternate; }
   .aurora i:nth-child(1) { --c:#e8508f; left:5%; top:0; }
   .aurora i:nth-child(2) { --c:#6a4fe6; right:0; top:10%; animation-duration:31s; }
@@ -94,8 +95,9 @@
   .mono { font:600 .86rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .eq { padding:12px 14px; border-radius:14px; background:rgba(127,127,127,.1); margin:8px 0; }
 
-  .steps { counter-reset:s; display:grid; gap:14px; max-width:760px; margin:0 auto; }
-  .step { padding:18px 20px; display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:start; }
+  .steps { counter-reset:s; display:grid; grid-template-columns:minmax(0,1fr); gap:14px; max-width:760px; margin:0 auto; }
+  .step { padding:18px 20px; display:grid; grid-template-columns:auto minmax(0,1fr); gap:14px; align-items:start; }
+  .step > div { min-width:0; }
   .step::before { counter-increment:s; content:counter(s); width:30px; height:30px; border-radius:50%; display:grid; place-items:center; font-weight:700; color:#fff; background:linear-gradient(135deg, var(--accent), var(--accent2)); }
   .step h3 { margin:2px 0 6px; font-size:1.05rem; }
   .step p { margin:0; color:var(--muted); font-size:.96rem; }

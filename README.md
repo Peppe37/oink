@@ -93,7 +93,8 @@ docker compose up -d        # http://localhost:8080
 
 Open it and create the first account (or set `OINK_ADMIN_PASSWORD` in `.env`). Data live in
 `./data` (SQLite, plus the key that encrypts API keys of linked accounts): back that folder
-up and keep the backups private.
+up and keep the backups private (`scripts/backup.sh` takes a consistent copy while Oink runs).
+More in [docs/self-hosting.md](docs/self-hosting.md): reverse proxy, restore, updates, what leaves your server.
 
 ### One-click updates (optional)
 
@@ -230,6 +231,7 @@ cd frontend && npm install && npm run dev          # web app (React, Vite), prox
 Checks: `uv run ruff check src tests && uv run mypy src && uv run pytest -q` and `npm run build`.
 A schema change ships an Alembic revision in `backend/src/oink/migrations/versions`.
 Translations live in `frontend/src/i18n/`: copy `en.ts`, translate, and add it to `LANGUAGES`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 Releases: push a `vX.Y.Z` tag; the image goes to `ghcr.io/peppe37/oink`.
 
 ## Similar projects

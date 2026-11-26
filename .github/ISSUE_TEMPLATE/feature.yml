@@ -1,0 +1,6 @@
+name: Idea
+description: A feature or a bank / statement format to support
+body:
+  - type: textarea
+    attributes: { label: What problem would it solve, description: For a statement format, attach a synthetic or fully redacted sample. }
+    validations: { required: true }
