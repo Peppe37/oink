@@ -175,6 +175,7 @@ export const api = {
   documentUrl: (id: number, download = false) => `/api/documents/${id}/file${download ? "?download=true" : ""}`,
 
   reports: () => call<Report[]>("/reports"),
+  reportMonths: () => call<{ month: string; report: boolean }[]>("/reports/months"),
   generate: (language: string, month?: string) => call<Report>(`/reports/generate?${query({ language, month })}`, { method: "POST" }),
   review: (range: { date_from?: string; date_to?: string }) => call<MovementReview>("/transactions/review", { method: "POST", body: json(range) }),
   ask: (question: string, language: string) => call<{ answer: string }>(`/ask?${query({ language })}`, { method: "POST", body: json({ question }) }),

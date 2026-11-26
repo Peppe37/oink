@@ -738,4 +738,9 @@ export const it: Dict = {
   "docs.layoutTrades": "{count} acquisti di titoli con ISIN e quote (piani di accumulo).",
   "docs.layoutSkipped": "Non importati: {what}.",
   "docs.layoutDeposit": "conto deposito",
+  "reports.list": "Resoconti mensili",
+  "reports.writtenOn": "scritto il {date}",
+  "reports.missing": "Mesi ancora da analizzare",
+  "reports.writing": "Sto scrivendo il resoconto di {month}…",
+  "reports.writingHint": "Uso solo i movimenti fino alla fine di {month}, confrontati con i mesi prima.",
 };

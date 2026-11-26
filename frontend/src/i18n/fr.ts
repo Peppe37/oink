@@ -738,4 +738,9 @@ export const fr: Dict = {
   "docs.layoutTrades": "{count} achats de titres avec ISIN et quantité (plans d'épargne).",
   "docs.layoutSkipped": "Non importés : {what}.",
   "docs.layoutDeposit": "compte épargne",
+  "reports.list": "Rapports mensuels",
+  "reports.writtenOn": "écrit le {date}",
+  "reports.missing": "Mois pas encore analysés",
+  "reports.writing": "Rédaction du rapport de {month}…",
+  "reports.writingHint": "Seulement les mouvements jusqu'à la fin de {month}, comparés aux mois précédents.",
 };

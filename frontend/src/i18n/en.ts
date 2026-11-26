@@ -740,6 +740,11 @@ export const en = {
   "docs.layoutTrades": "{count} securities purchases with ISIN and quantity (savings plans).",
   "docs.layoutSkipped": "Not imported: {what}.",
   "docs.layoutDeposit": "savings deposit",
+  "reports.list": "Monthly reports",
+  "reports.writtenOn": "written on {date}",
+  "reports.missing": "Months not analysed yet",
+  "reports.writing": "Writing the report for {month}…",
+  "reports.writingHint": "Only movements up to the end of {month}, compared with the months before.",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

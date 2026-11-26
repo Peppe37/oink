@@ -738,4 +738,9 @@ export const de: Dict = {
   "docs.layoutTrades": "{count} Wertpapierkäufe mit ISIN und Stückzahl (Sparpläne).",
   "docs.layoutSkipped": "Nicht importiert: {what}.",
   "docs.layoutDeposit": "Sparkonto",
+  "reports.list": "Monatsberichte",
+  "reports.writtenOn": "geschrieben am {date}",
+  "reports.missing": "Noch nicht analysierte Monate",
+  "reports.writing": "Schreibe den Bericht für {month}…",
+  "reports.writingHint": "Nur Bewegungen bis Ende {month}, verglichen mit den Monaten davor.",
 };

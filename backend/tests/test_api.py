@@ -552,3 +552,29 @@ def test_an_upgrade_keeps_every_row(tmp_path: Path) -> None:
         assert [a["name"] for a in c.get("/api/accounts").json()] == ["Revolut"]
         assert len(c.get("/api/transactions").json()) == 1
     assert (tmp_path / "oink-before-migration-0009.db").is_file()
+
+
+def test_a_past_month_report_sees_nothing_after_it(owner: TestClient) -> None:
+    from datetime import date as d
+
+    from oink.services import reports as rep
+
+    acc = owner.post("/api/accounts", json={"name": "Conto", "balance": "1000"}).json()
+    for day, amount in (("2026-09-10", "-50"), ("2026-10-10", "-70"), ("2026-11-10", "-300")):
+        owner.post("/api/transactions", json={"account_id": acc["id"], "day": day,
+                                              "amount": amount, "description": "Spesa"})  # fmt: skip
+    app = owner.app
+    with app.state.db.sessions() as db:  # type: ignore[attr-defined]
+        from oink.core.db import User
+
+        user = db.query(User).filter_by(username="giuseppe").one()
+        book = rep.Book.of(db, user)
+        sept = rep.facts_for_ai(book, "2026-09", with_text=True, today=d(2026, 11, 26))
+        octo = rep.facts_for_ai(book, "2026-10", with_text=True, today=d(2026, 11, 26))
+    assert sept["months_of_history_before"] == 0 and sept["as_of"] == "2026-09-30"
+    # today 1000 - 50 - 70 - 300 = 580: at the end of September October and November hadn't happened
+    assert sept["net_worth"] == 580 + 70 + 300
+    assert octo["months_of_history_before"] == 1 and octo["net_worth"] == 580 + 300
+    months = owner.get("/api/reports/months").json()
+    assert [m["month"] for m in months] == ["2026-11", "2026-10", "2026-09"]
+    assert not any(m["report"] for m in months)

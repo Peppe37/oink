@@ -985,6 +985,20 @@ def list_reports(
     )
 
 
+@api.get("/reports/months")
+def report_months(
+    who: Caller = Depends(require("reports:read")), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """Months with movements, newest first, and whether each has its report."""
+    done = set(
+        db.scalars(
+            select(Report.month).where(Report.user_id == who.user_id, Report.kind == "monthly")
+        )
+    )
+    months = rep.months_with_data(rep.Book.of(db, who.user))
+    return [{"month": m, "report": m in done} for m in reversed(months)]
+
+
 @api.post("/reports/generate", response_model=ReportOut)
 async def generate_report(
     request: Request,

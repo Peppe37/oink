@@ -150,7 +150,11 @@ class AI:
             " a monthly report in Markdown: 1) how the month went in 3 lines, 2) where the money"
             " went and what changed against the usual, 3) subscriptions and recurring costs to"
             " review, 4) three concrete, measurable tips. Use only the numbers you receive, never"
-            " invent any. Amounts are in the user's base currency. Clear, friendly, no jargon.",
+            " invent any. Amounts are in the user's base currency. Clear, friendly, no jargon."
+            " The report is about the month in «month», as of «as_of»: never mention or guess"
+            " anything after it. Compare only with the months before it; when"
+            " «months_of_history_before» is 0 this is the first month with data, so say so and"
+            " make no comparison («usual» figures are then empty, not zero spending).",
             json.dumps(facts, ensure_ascii=False, default=str),
         )
 

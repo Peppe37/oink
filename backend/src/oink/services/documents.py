@@ -47,6 +47,7 @@ from oink.services.statements import Outcome, apply, pick_account
 from oink.services.stores import Cache, StoreError, Stores
 from oink.services.verify import (
     Verdict,
+    balances,
     check_invoice,
     check_payslip,
     check_statement,
@@ -608,6 +609,16 @@ async def known_layout(filename: str, raw: bytes) -> tuple[layouts.Layout, str] 
     except ImportError_:
         return None
     found = layouts.read(text)
+    if found is None and text.strip():
+        # any other generated statement: the general line rules, trusted only if its
+        # balances add up (otherwise Docling reads its tables)
+        with contextlib.suppress(ImportError_):
+            parsed = parse_pdf_lines(text)
+            if parsed.rows and not parsed.estimated:
+                opening, closing = balances(text)
+                if check_statement(parsed.rows, text, False).status == "ok":
+                    found = layouts.Layout("", parsed.rows, opening, closing,
+                                           parsed.ibans or find_ibans(text))  # fmt: skip
     return (found, text) if found is not None else None
 
 
@@ -708,7 +719,7 @@ async def process(
     body = extraction.text
     doc.text = body
     doc.kind = kind or ("statement" if layout is not None else guess_kind(doc.filename, body))
-    if layout is not None:
+    if layout is not None and layout.bank:
         doc.issuer = layout.bank
         doc.title = f"{layout.bank} · {layout.period}" if layout.period else doc.title
     doc.doc_date = guess_date(body)
@@ -742,7 +753,7 @@ async def process(
             for r in rows
         ]
         review["ibans"] = layout.ibans if layout is not None else find_ibans(body)
-    if layout is not None:
+    if layout is not None and layout.bank:
         review["layout"] = {"bank": layout.bank, "skipped": layout.skipped,
                             "trades": layout.trades, "savings": len(layout.savings)}  # fmt: skip
     doc.review = review

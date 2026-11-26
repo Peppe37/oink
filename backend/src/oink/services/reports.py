@@ -221,12 +221,43 @@ def balance_history(book: Book, days: int = 180, today: date | None = None) -> l
     return list(reversed(points))
 
 
-def facts_for_ai(book: Book, month: str, *, with_text: bool) -> dict[str, Any]:
-    """What the AI may see. Without text: only totals per category."""
+def net_worth_at(book: Book, day: date, today: date | None = None) -> float:
+    """Total balance at the end of `day`: today's balances minus what moved after it."""
+    today = today or date.today()
+    total = net_worth(book)["total"]
+    if day >= today:
+        return float(total)
+    after = sum(v for _, v in book.rows(day + timedelta(days=1), today + timedelta(days=1)))
+    return _r(total - after)
+
+
+def months_with_data(book: Book) -> list[str]:
+    """Months that have movements, oldest first."""
+    days = book.db.scalars(
+        select(Transaction.day).where(Transaction.user_id == book.user.id).distinct()
+    )
+    return sorted({d.strftime("%Y-%m") for d in days})
+
+
+def facts_for_ai(
+    book: Book, month: str, *, with_text: bool, today: date | None = None
+) -> dict[str, Any]:
+    """What the AI may see about `month`, as things stood at its end: nothing that happened
+    later (a report for September never sees October). Without text: only totals."""
+    today = today or date.today()
+    _, end = month_bounds(month)
+    last_day = min(end - timedelta(days=1), today)
     data = compare(book, month)
-    data["recurring"] = recurring(book)
-    data["net_worth"] = net_worth(book)["total"]
-    data["note"] = f"Amounts in {book.base}; negative = money out."
+    before = [m for m in months_with_data(book) if m < month]
+    data["month"] = month
+    data["as_of"] = last_day.isoformat()
+    data["months_of_history_before"] = len(before)
+    data["recurring"] = recurring(book, today=last_day)
+    data["net_worth"] = net_worth_at(book, last_day, today)
+    data["note"] = (
+        f"Amounts in {book.base}; negative = money out. Everything is as of {last_day}: "
+        "there is no data after it."
+    )
     if not with_text:
         data["current"].pop("top_merchants", None)
         data["current"].pop("biggest", None)
