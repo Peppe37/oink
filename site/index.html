@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oink – your money, at home</title>
+<meta name="description" content="Oink is a self-hosted personal finance app: bank sync, statements read by rules, investments, fixed costs and a documents hub. Free, open source, yours.">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/svg+xml" href="assets/pig.svg">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0c0b10">
+<meta property="og:title" content="Oink">
+<meta property="og:description" content="Your money, at home. A self-hosted finance app with real Apple-style glass. Free and open source.">
+<meta property="og:image" content="https://oink.giulapi.dev/assets/social-preview.jpg">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://oink.giulapi.dev/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://oink.giulapi.dev/assets/social-preview.jpg">
+<link rel="canonical" href="https://oink.giulapi.dev/">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Oink","applicationCategory":"FinanceApplication","operatingSystem":"Docker (Linux, amd64/arm64); any modern browser","description":"Self-hosted personal finance: bank sync over PSD2, statements read by rules, investments and savings plans, fixed costs, documents hub. Free and open source.","url":"https://oink.giulapi.dev/","downloadUrl":"https://github.com/Peppe37/oink","license":"https://www.gnu.org/licenses/agpl-3.0.html","offers":{"@type":"Offer","price":"0","priceCurrency":"EUR"},"author":{"@type":"Person","name":"Giuseppe","url":"https://giulapi.dev/"}}
+</script>
+<style>
+  :root { --bg:#fbfafc; --fg:#1d1d1f; --muted:#6e6e73; --card:rgba(255,255,255,.62); --line:rgba(0,0,0,.09); --accent:#e8508f; --accent2:#7a5cff; --rim:rgba(255,255,255,.9); --shadow:0 20px 50px -24px rgba(60,20,80,.35); }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0c0b10; --fg:#f5f5f7; --muted:#a1a1a6; --card:rgba(30,28,38,.55); --line:rgba(255,255,255,.1); --accent:#ff6aa8; --accent2:#9b84ff; --rim:rgba(255,255,255,.14); --shadow:0 24px 60px -24px rgba(0,0,0,.8); }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; overflow-x:hidden; }
+  a { color:var(--accent); }
+  main, footer, .topbar { max-width:1040px; margin:0 auto; padding-left:16px; padding-right:16px; position:relative; z-index:1; }
+
+  /* aurora: soft blobs behind everything, like the app */
+  .aurora { position:fixed; inset:-20vmax; z-index:0; pointer-events:none; opacity:.55; }
+  .aurora i { position:absolute; width:55vmax; height:55vmax; border-radius:50%; filter:blur(0); background:radial-gradient(closest-side, var(--c), transparent 70%); animation:drift 26s ease-in-out infinite alternate; }
+  .aurora i:nth-child(1) { --c:#e8508f; left:5%; top:0; }
+  .aurora i:nth-child(2) { --c:#6a4fe6; right:0; top:10%; animation-duration:31s; }
+  .aurora i:nth-child(3) { --c:#f2a35c; left:25%; bottom:0; animation-duration:37s; opacity:.7; }
+  @keyframes drift { to { transform:translate(6vmax,-4vmax) scale(1.08); } }
+  @media (prefers-reduced-motion: reduce) { .aurora i { animation:none; } }
+
+  .glass { background:var(--card); border:1px solid var(--line); border-radius:24px; box-shadow:var(--shadow), inset 0 1px 0 var(--rim); backdrop-filter:blur(24px) saturate(1.6); -webkit-backdrop-filter:blur(24px) saturate(1.6); }
+
+  .topbar { display:flex; justify-content:space-between; align-items:center; padding-top:16px; }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:700; color:var(--fg); text-decoration:none; }
+  .brand img { width:30px; height:30px; }
+  .lang { display:inline-flex; padding:3px; border-radius:980px; }
+  .lang button { border:0; background:transparent; color:var(--muted); font:600 .8rem/1 inherit; font-family:inherit; padding:7px 13px; border-radius:980px; cursor:pointer; }
+  .lang button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+
+  .hero { text-align:center; padding:40px 0 18px; }
+  .logo { width:104px; height:104px; display:block; margin:0 auto 18px; filter:drop-shadow(0 18px 30px rgba(232,80,143,.45)); animation:bob 5s ease-in-out infinite; }
+  @keyframes bob { 50% { transform:translateY(-6px) rotate(-2deg); } }
+  h1 { font-size:clamp(2.4rem, 8vw, 4.2rem); margin:0 0 12px; letter-spacing:-.03em; line-height:1.05; }
+  h1 span { background:linear-gradient(100deg, var(--accent), var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tag { color:var(--muted); font-size:1.22rem; max-width:620px; margin:0 auto 28px; }
+  .btn { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg, var(--accent), #c94b8c); color:#fff; text-decoration:none; padding:13px 24px; border-radius:980px; font-weight:600; margin:4px; box-shadow:0 12px 26px -12px rgba(232,80,143,.8); transition:transform .2s; }
+  .btn:hover { transform:translateY(-2px); }
+  .btn.sec { background:var(--card); color:var(--fg); box-shadow:inset 0 0 0 1px var(--line); }
+  .meta { color:var(--muted); font-size:.9rem; margin-top:14px; min-height:1.4em; }
+
+  /* showcase: the screenshots, switched by a dock like the app's */
+  .show { margin:30px auto 0; max-width:980px; padding:14px; }
+  .frame { position:relative; border-radius:16px; overflow:hidden; aspect-ratio:16/10; background:#111; }
+  .frame img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:top; opacity:0; transform:scale(1.015); transition:opacity .5s, transform .7s; }
+  .frame img.on { opacity:1; transform:none; }
+  .frame .phone { position:absolute; right:3%; bottom:-6%; width:23%; aspect-ratio:390/844; border-radius:26px; overflow:hidden; box-shadow:0 30px 60px -10px rgba(0,0,0,.7), 0 0 0 6px #0b0b0d, 0 0 0 7px rgba(255,255,255,.18); transition:transform .6s cubic-bezier(.3,1.3,.5,1); }
+  .frame .phone img { object-position:top; }
+  @media (max-width:640px) { .frame .phone { width:30%; right:4%; } }
+  .dock { display:flex; justify-content:center; gap:8px; margin:-34px auto 0; position:relative; width:max-content; max-width:100%; padding:8px 10px; border-radius:22px; }
+  .dock button { width:46px; height:46px; border:0; border-radius:13px; cursor:pointer; display:grid; place-items:center; color:#fff; background:var(--g); box-shadow:inset 0 1px 0 rgba(255,255,255,.4), 0 6px 14px -6px rgba(0,0,0,.5); transition:transform .25s cubic-bezier(.3,1.6,.5,1); position:relative; }
+  .dock button:hover, .dock button:focus-visible { transform:translateY(-8px) scale(1.18); outline:none; }
+  .dock button[aria-pressed="true"]::after { content:""; position:absolute; bottom:-7px; width:4px; height:4px; border-radius:50%; background:var(--fg); }
+  .dock svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .caption { text-align:center; color:var(--muted); margin:16px 0 0; min-height:1.6em; }
+  @media (max-width:420px) { .dock button { width:38px; height:38px; border-radius:11px; } .dock { gap:5px; } }
+
+  section { padding:56px 0 8px; }
+  h2 { font-size:clamp(1.7rem, 4.6vw, 2.4rem); letter-spacing:-.02em; margin:0 0 8px; text-align:center; }
+  .lead { color:var(--muted); text-align:center; max-width:640px; margin:0 auto 28px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
+  .card { padding:20px 20px 18px; }
+  .card h3 { margin:12px 0 6px; font-size:1.08rem; }
+  .card p { margin:0; color:var(--muted); font-size:.96rem; }
+  .ic { width:38px; height:38px; border-radius:11px; display:grid; place-items:center; color:#fff; background:var(--g); box-shadow:inset 0 1px 0 rgba(255,255,255,.35); }
+  .ic svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+
+  .rules { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }
+  @media (max-width:760px) { .rules { grid-template-columns:1fr; } }
+  .rules .card { padding:24px; }
+  .check { display:flex; gap:10px; align-items:flex-start; margin:10px 0; font-size:.98rem; }
+  .check b { flex:none; width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-size:.75rem; color:#fff; background:#34c759; margin-top:2px; }
+  .mono { font:600 .86rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .eq { padding:12px 14px; border-radius:14px; background:rgba(127,127,127,.1); margin:8px 0; }
+
+  .steps { counter-reset:s; display:grid; gap:14px; max-width:760px; margin:0 auto; }
+  .step { padding:18px 20px; display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:start; }
+  .step::before { counter-increment:s; content:counter(s); width:30px; height:30px; border-radius:50%; display:grid; place-items:center; font-weight:700; color:#fff; background:linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .step h3 { margin:2px 0 6px; font-size:1.05rem; }
+  .step p { margin:0; color:var(--muted); font-size:.96rem; }
+  pre { margin:10px 0 0; padding:12px 14px; border-radius:12px; background:#0d0c12; color:#f3eefc; overflow-x:auto; font:500 .84rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  details { padding:16px 20px; margin:0 auto 10px; max-width:760px; }
+  summary { cursor:pointer; font-weight:600; list-style:none; display:flex; justify-content:space-between; gap:12px; }
+  summary::after { content:"+"; color:var(--muted); font-weight:400; transition:transform .25s; }
+  details[open] summary::after { transform:rotate(45deg); }
+  details p { color:var(--muted); margin:10px 0 0; font-size:.96rem; }
+
+  .stats { display:flex; justify-content:center; gap:28px; flex-wrap:wrap; margin-top:10px; }
+  .stat { text-align:center; } .stat b { display:block; font-size:1.6rem; } .stat span { color:var(--muted); font-size:.85rem; }
+  footer { padding:56px 16px 40px; text-align:center; color:var(--muted); font-size:.9rem; }
+  .rv { opacity:0; transform:translateY(18px); transition:opacity .7s, transform .7s; }
+  .rv.in { opacity:1; transform:none; }
+  @media (prefers-reduced-motion: reduce) { .rv { opacity:1; transform:none; transition:none; } .logo { animation:none; } }
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<div class="topbar">
+  <a class="brand" href="#"><img src="assets/pig.svg" alt="">Oink</a>
+  <div class="lang glass" role="group" aria-label="Language">
+    <button type="button" data-lang="en" aria-pressed="true">EN</button>
+    <button type="button" data-lang="it" aria-pressed="false">IT</button>
+  </div>
+</div>
+
+<main>
+  <header class="hero">
+    <img class="logo" src="assets/pig.svg" alt="Oink">
+    <h1 data-i18n="h1">Your money, <span>at home.</span></h1>
+    <p class="tag" data-i18n="tag">A personal finance app you host yourself. Your banks, statements, investments and documents in one calm place, with numbers checked by rules and a design that feels like Apple's.</p>
+    <a class="btn" href="https://github.com/Peppe37/oink" target="_blank" rel="noopener"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span data-i18n="cta">Get it on GitHub</span></a>
+    <a class="btn sec" href="#install" data-i18n="cta2">Self-host in 5 minutes</a>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div class="show glass rv" id="show">
+    <div class="frame">
+      <img class="on" src="assets/shots/desk-home.jpg" alt="Oink home: net worth, this month, where the money goes" data-k="home">
+      <img src="assets/shots/desk-activity.jpg" alt="Movements with filters and running balance" data-k="activity" loading="lazy">
+      <img src="assets/shots/desk-plan.jpg" alt="Accounts" data-k="plan" loading="lazy">
+      <img src="assets/shots/desk-invest.jpg" alt="Investments and savings plans" data-k="invest" loading="lazy">
+      <img src="assets/shots/desk-documents.jpg" alt="Documents hub" data-k="documents" loading="lazy">
+      <img src="assets/shots/desk-insights.jpg" alt="AI monthly reports" data-k="insights" loading="lazy">
+      <div class="phone"><img class="on" src="assets/shots/mob-home.jpg" alt="Oink on a phone" id="phone"></div>
+    </div>
+  </div>
+  <div class="dock glass" role="group" aria-label="Screens">
+    <button type="button" aria-pressed="true" data-k="home" style="--g:linear-gradient(160deg,#ff8cc0,#c94b8c)" aria-label="Home"><svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/></svg></button>
+    <button type="button" aria-pressed="false" data-k="activity" style="--g:linear-gradient(160deg,#6cc9ff,#2f86e8)" aria-label="Movements"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/><circle cx="18" cy="15.5" r="2.5"/></svg></button>
+    <button type="button" aria-pressed="false" data-k="plan" style="--g:linear-gradient(160deg,#a08bff,#6a4fe6)" aria-label="Accounts"><svg viewBox="0 0 24 24"><rect x="3.5" y="6" width="17" height="13" rx="3"/><path d="M3.5 10h17M15.5 14.5h2"/></svg></button>
+    <button type="button" aria-pressed="false" data-k="invest" style="--g:linear-gradient(160deg,#43e5b5,#0fa37f)" aria-label="Investments"><svg viewBox="0 0 24 24"><path d="m4 16 5-5 4 3 7-7"/><path d="M15 7h5v5"/><path d="M4 20h16"/></svg></button>
+    <button type="button" aria-pressed="false" data-k="documents" style="--g:linear-gradient(160deg,#7fe0f5,#2ba7c9)" aria-label="Documents"><svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6H10l2 2h6.5A1.5 1.5 0 0 1 20 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/></svg></button>
+    <button type="button" aria-pressed="false" data-k="insights" style="--g:linear-gradient(160deg,#ffd27a,#f08a1c)" aria-label="Insights"><svg viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7.2-4.5 3.5 1.6 5.5L12 15l-4.6 3.2L9 12.7 4.5 9.2l5.7-.2z"/></svg></button>
+  </div>
+  <p class="caption" id="caption" data-i18n="c_home">Home: what you own, what changed this month, where the money goes.</p>
+
+  <section id="features">
+    <h2 class="rv" data-i18n="fTitle">Everything about your money, nothing of it leaves</h2>
+    <p class="lead rv" data-i18n="fLead">It runs on your server, in one Docker container. No account with us, no cloud, no ads: the database is a file you own.</p>
+    <div class="grid">
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#43e5b5,#0fa37f)"><svg viewBox="0 0 24 24"><path d="M3 10 12 4l9 6"/><path d="M5 10v9h14v-9M9 19v-5h6v5"/></svg></div><h3 data-i18n="f1t">Banks, synced</h3><p data-i18n="f1">2,500+ European banks over PSD2 through Enable Banking, free for your own accounts: full history, pending payments, cards. Or add any account by hand.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#6cc9ff,#2f86e8)"><svg viewBox="0 0 24 24"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4M10 13h5M10 16.5h5"/></svg></div><h3 data-i18n="f2t">Statements read by rules</h3><p data-i18n="f2">Upload a PDF or a bank export: movements are read by rules and must add up (opening + movements = closing). What doesn't goes to «To review», never into your totals.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#a08bff,#6a4fe6)"><svg viewBox="0 0 24 24"><path d="M5 8h11l-3-3M19 16H8l3 3"/></svg></div><h3 data-i18n="f3t">Transfers aren't spending</h3><p data-i18n="f3">Money you move between your own accounts is paired and never counted as an expense. Unknown accounts in a statement are proposed already filled in.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#ffd27a,#f08a1c)"><svg viewBox="0 0 24 24"><path d="m4 16 5-5 4 3 7-7"/><path d="M15 7h5v5"/></svg></div><h3 data-i18n="f4t">Investments and savings plans</h3><p data-i18n="f4">Holdings with market prices, savings plans found by themselves in your movements, several securities per plan, switch a security from a date, Monte Carlo simulator.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#ff8cc0,#c94b8c)"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/></svg></div><h3 data-i18n="f5t">Fixed costs that follow their payments</h3><p data-i18n="f5">Monthly, quarterly or yearly. Each one finds its payments; a missing one shows up on Home: wait, mark it paid in cash, skip this time, or cancel it.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#7fe0f5,#2ba7c9)"><svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6H10l2 2h6.5A1.5 1.5 0 0 1 20 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/></svg></div><h3 data-i18n="f6t">A documents hub</h3><p data-i18n="f6">Payslips, contracts, invoices: read by Docling, searched with BGE-M3 (dense + exact words), and a chat over them. No local generative AI: models leave memory after 5 idle minutes.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#cf95ff,#9550e8)"><svg viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7.2-4.5 3.5 1.6 5.5L12 15l-4.6 3.2L9 12.7 4.5 9.2l5.7-.2z"/></svg></div><h3 data-i18n="f7t">The AI you choose, only to help</h3><p data-i18n="f7">Any provider through LiteLLM, or none at all. It suggests categories, explains a statement that doesn't add up and writes monthly reports. It never changes a number.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#b3aec2,#7c7690)"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.5M20.5 19a5 5 0 0 0-3.5-4.8"/></svg></div><h3 data-i18n="f8t">For the whole family</h3><p data-i18n="f8">Everyone signs up and sees only their own money. The service admin manages people and settings and sees no one's finances. SSO with OpenID Connect if you have it.</p></article>
+      <article class="card glass rv"><div class="ic" style="--g:linear-gradient(160deg,#6cc9ff,#6a4fe6)"><svg viewBox="0 0 24 24"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13.5 6l-3 12"/></svg></div><h3 data-i18n="f9t">Made for your assistant</h3><p data-i18n="f9">A REST API and an MCP server with scoped tokens (reads and writes separate), so the assistant you use can ask «how much did I spend on fuel?» or file a payslip.</p></article>
+    </div>
+  </section>
+
+  <section id="rules">
+    <h2 class="rv" data-i18n="rTitle">Numbers you can trust</h2>
+    <p class="lead rv" data-i18n="rLead">Money is never guessed. Every document that carries totals is reconciled before anything enters your accounts.</p>
+    <div class="rules">
+      <div class="card glass rv">
+        <div class="eq mono" data-i18n="e1">statement · opening + movements = closing</div>
+        <div class="eq mono" data-i18n="e2">payslip · gross − deductions = net</div>
+        <div class="eq mono" data-i18n="e3">invoice · taxable + VAT = total</div>
+      </div>
+      <div class="card glass rv">
+        <div class="check"><b>✓</b><span data-i18n="k1">The same movement from the bank and from a statement is kept once.</span></div>
+        <div class="check"><b>✓</b><span data-i18n="k2">Terminal codes become real names («IP Italiana Petroli», not «44941 Palo Del Colle»).</span></div>
+        <div class="check"><b>✓</b><span data-i18n="k3">Anything that doesn't add up waits for you, with the AI's note on where the mistake may be.</span></div>
+        <div class="check"><b>✓</b><span data-i18n="k4">Before every update the database is copied, and you can roll back.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2 class="rv" data-i18n="iTitle">Self-host in 5 minutes</h2>
+    <p class="lead rv" data-i18n="iLead">Any machine with Docker: a mini PC, a NAS, a Proxmox container, a small VPS.</p>
+    <div class="steps">
+      <div class="step glass rv"><div><h3 data-i18n="s1t">Get the compose file</h3><p data-i18n="s1">Download it with the example settings and set where people reach Oink.</p>
+        <pre>mkdir oink &amp;&amp; cd oink
+curl -O https://raw.githubusercontent.com/Peppe37/oink/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/Peppe37/oink/main/.env.example</pre></div></div>
+      <div class="step glass rv"><div><h3 data-i18n="s2t">Start it</h3><p data-i18n="s2">Add the optional documents engine with its profile when you want it.</p>
+        <pre>docker compose up -d
+# documents engine (Docling + BGE-M3):
+docker compose --profile engine up -d</pre></div></div>
+      <div class="step glass rv"><div><h3 data-i18n="s3t">Open it and sign up</h3><p data-i18n="s3">The admin is «admin» with password «oink», to change at the first sign-in. Link your banks from Settings → Bank access, or add an account and drop in a statement.</p></div></div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2 class="rv">FAQ</h2>
+    <details class="glass rv"><summary data-i18n="q1">Is it really free?</summary><p data-i18n="a1">Yes, and open source under the AGPL-3.0. Bank sync through Enable Banking is free for linking your own accounts. The AI is optional and uses your own key, or a local model.</p></details>
+    <details class="glass rv"><summary data-i18n="q2">Does my data go anywhere?</summary><p data-i18n="a2">It stays on your server. Only what you turn on leaves it: bank sync talks to your bank, market prices come from Yahoo Finance, exchange rates from the ECB and CoinGecko, and the AI (if you set one) gets descriptions only when you allow it.</p></details>
+    <details class="glass rv"><summary data-i18n="q3">Which banks work?</summary><p data-i18n="a3">Most European banks over PSD2 (Revolut, Intesa Sanpaolo, Trade Republic's cash account, N26, Fineco…). Brokers show their securities through statements: Oink reads them and proposes your savings plans.</p></details>
+    <details class="glass rv"><summary data-i18n="q4">Can I use it on my phone?</summary><p data-i18n="a4">It's a web app that installs on the home screen (iPhone and Android) and is made for phones as much as for desktops. Put it behind your VPN or Cloudflare Access to reach it from anywhere.</p></details>
+    <div class="stats rv" id="stats"></div>
+  </section>
+</main>
+
+<footer>
+  <p><span data-i18n="made">Made by</span> <a href="https://giulapi.dev/">Giuseppe</a> · <a href="https://github.com/Peppe37/oink">GitHub</a> · AGPL-3.0</p>
+  <p data-i18n="foot">Oink is not a bank and gives no financial advice: it shows you your own numbers.</p>
+</footer>
+
+<script>
+(() => {
+  const T = {
+    it: {
+      h1: 'I tuoi soldi, <span>a casa tua.</span>',
+      tag: "Un'app di finanza personale che ospiti tu. Banche, estratti conto, investimenti e documenti in un unico posto tranquillo, con i numeri controllati da regole e un design che sembra Apple.",
+      cta: 'Scaricalo da GitHub', cta2: 'Installalo in 5 minuti',
+      c_home: 'Home: quanto possiedi, cosa è cambiato questo mese, dove vanno i soldi.',
+      c_activity: 'Movimenti: filtri, saldo progressivo, chi ha pagato e chi ha ricevuto.',
+      c_plan: 'Conti: banche collegate, conti a mano, contanti e crypto in ogni valuta.',
+      c_invest: 'Investimenti: posizioni a prezzi di mercato e piani di accumulo trovati da soli.',
+      c_documents: 'Documenti: estratti, buste paga e contratti letti, cercati e interrogabili.',
+      c_insights: 'Analisi: un resoconto del mese scritto dall’IA che scegli tu, sui tuoi numeri.',
+      fTitle: 'Tutto sui tuoi soldi, niente esce di casa',
+      fLead: 'Gira sul tuo server, in un solo container Docker. Nessun account da noi, nessun cloud, nessuna pubblicità: il database è un file tuo.',
+      f1t: 'Banche sincronizzate', f1: 'Oltre 2.500 banche europee via PSD2 con Enable Banking, gratis per i tuoi conti: tutto lo storico, i pagamenti in attesa, le carte. Oppure aggiungi un conto a mano.',
+      f2t: 'Estratti letti da regole', f2: 'Carica un PDF o l’export della banca: i movimenti sono letti da regole e devono tornare (saldo iniziale + movimenti = saldo finale). Quello che non torna va in «Da controllare», mai nei totali.',
+      f3t: 'I giroconti non sono spese', f3: 'I soldi che sposti tra i tuoi conti vengono abbinati e non contano mai come spesa. Un conto sconosciuto in un estratto ti viene proposto già compilato.',
+      f4t: 'Investimenti e PAC', f4: 'Posizioni a prezzi di mercato, piani di accumulo trovati da soli nei movimenti, più titoli per piano, cambio di titolo da una data, simulatore Monte Carlo.',
+      f5t: 'Spese fisse che seguono i pagamenti', f5: 'Mensili, trimestrali o annuali. Ognuna trova i suoi pagamenti; se una manca compare in Home: aspetta, segnala pagata in contanti, salta questa volta o annullala.',
+      f6t: 'Un archivio di documenti', f6: 'Buste paga, contratti, fatture: letti da Docling, cercati con BGE-M3 (significato + parole esatte) e una chat sopra. Nessuna IA generativa locale: i modelli lasciano la memoria dopo 5 minuti.',
+      f7t: 'L’IA che scegli tu, solo per aiutare', f7: 'Qualsiasi fornitore tramite LiteLLM, o nessuno. Suggerisce categorie, spiega un estratto che non torna e scrive il resoconto del mese. Non cambia mai un numero.',
+      f8t: 'Per tutta la famiglia', f8: 'Ognuno si registra e vede solo i suoi soldi. L’amministratore gestisce persone e impostazioni e non vede le finanze di nessuno. SSO con OpenID Connect se ce l’hai.',
+      f9t: 'Fatto per il tuo assistente', f9: 'Un’API REST e un server MCP con token a permessi separati (lettura e scrittura), così il tuo assistente può chiedere «quanto ho speso di benzina?» o archiviare una busta paga.',
+      rTitle: 'Numeri di cui fidarti', rLead: 'I soldi non si indovinano mai. Ogni documento con dei totali viene riconciliato prima che entri qualcosa nei tuoi conti.',
+      e1: 'estratto · iniziale + movimenti = finale', e2: 'busta paga · lordo − trattenute = netto', e3: 'fattura · imponibile + IVA = totale',
+      k1: 'Lo stesso movimento dalla banca e dall’estratto è tenuto una volta sola.',
+      k2: 'I codici dei terminali diventano nomi veri («IP Italiana Petroli», non «44941 Palo Del Colle»).',
+      k3: 'Quello che non torna ti aspetta, con la nota dell’IA su dove può essere l’errore.',
+      k4: 'Prima di ogni aggiornamento il database viene copiato, e puoi tornare indietro.',
+      iTitle: 'Installalo in 5 minuti', iLead: 'Qualsiasi macchina con Docker: un mini PC, un NAS, un container Proxmox, un piccolo VPS.',
+      s1t: 'Prendi il file compose', s1: 'Scaricalo con le impostazioni d’esempio e indica dove si raggiunge Oink.',
+      s2t: 'Avvialo', s2: 'Aggiungi il motore dei documenti con il suo profilo quando ti serve.',
+      s3t: 'Aprilo e registrati', s3: 'L’amministratore è «admin» con password «oink», da cambiare al primo accesso. Collega le banche da Impostazioni → Accesso banche, oppure aggiungi un conto e trascina un estratto.',
+      q1: 'È davvero gratis?', a1: 'Sì, e open source con licenza AGPL-3.0. Il collegamento alle banche con Enable Banking è gratuito per i tuoi conti. L’IA è facoltativa e usa la tua chiave, o un modello locale.',
+      q2: 'I miei dati vanno da qualche parte?', a2: 'Restano sul tuo server. Esce solo quello che attivi: la sincronizzazione parla con la tua banca, i prezzi arrivano da Yahoo Finance, i cambi da BCE e CoinGecko, e l’IA (se la imposti) riceve le descrizioni solo se lo consenti.',
+      q3: 'Quali banche funzionano?', a3: 'La maggior parte delle banche europee via PSD2 (Revolut, Intesa Sanpaolo, il conto liquidità di Trade Republic, N26, Fineco…). I broker mostrano i titoli negli estratti: Oink li legge e ti propone i piani di accumulo.',
+      q4: 'Si usa dal telefono?', a4: 'È una web app che si installa nella schermata Home (iPhone e Android), pensata per il telefono quanto per il computer. Mettila dietro la tua VPN o Cloudflare Access per raggiungerla ovunque.',
+      made: 'Fatto da', foot: 'Oink non è una banca e non dà consigli finanziari: ti mostra i tuoi numeri.',
+      stars: 'stelle su GitHub', version: 'ultima versione', langs: 'lingue',
+      metaV: 'Versione {v} · aggiornata {d}'
+    }
+  };
+  const caps = { en: {
+      c_home: 'Home: what you own, what changed this month, where the money goes.',
+      c_activity: 'Movements: filters, running balance, who paid and who received.',
+      c_plan: 'Accounts: linked banks, hand-made accounts, cash and crypto in any currency.',
+      c_invest: 'Investments: holdings at market prices and savings plans found by themselves.',
+      c_documents: 'Documents: statements, payslips and contracts read, searched and asked.',
+      c_insights: 'Insights: a monthly report by the AI you choose, on your numbers.',
+      stars: 'stars on GitHub', version: 'latest version', langs: 'languages', metaV: 'Version {v} · released {d}' } };
+  const EN = {};
+  document.querySelectorAll('[data-i18n]').forEach((el) => { EN[el.dataset.i18n] = el.innerHTML; });
+  Object.assign(EN, caps.en);
+  let lang = 'en', current = 'home', release = null;
+  const t = (k) => (lang === 'it' ? T.it[k] : EN[k]) ?? EN[k] ?? k;
+  function apply() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => { const v = t(el.dataset.i18n); if (v) el.innerHTML = v; });
+    document.querySelectorAll('.lang button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
+    document.getElementById('caption').innerHTML = t('c_' + current);
+    renderMeta();
+  }
+  function setLang(l) { lang = l; try { localStorage.setItem('oink-lang', l); } catch (e) {} apply(); }
+  document.querySelectorAll('.lang button').forEach((b) => b.addEventListener('click', () => setLang(b.dataset.lang)));
+  try { const saved = localStorage.getItem('oink-lang'); lang = saved || ((navigator.language || '').startsWith('it') ? 'it' : 'en'); } catch (e) {}
+
+  // the dock switches the screens
+  const phones = { home: 'mob-home', activity: 'mob-activity', invest: 'mob-invest' };
+  const phone = document.getElementById('phone');
+  function show(k) {
+    current = k;
+    document.querySelectorAll('.frame > img').forEach((img) => img.classList.toggle('on', img.dataset.k === k));
+    document.querySelectorAll('.dock button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.k === k)));
+    if (phones[k]) phone.src = 'assets/shots/' + phones[k] + '.jpg';
+    phone.parentElement.style.transform = phones[k] ? '' : 'translateY(115%)';
+    document.getElementById('caption').innerHTML = t('c_' + k);
+  }
+  let auto = null; const order = ['home', 'activity', 'plan', 'invest', 'documents', 'insights'];
+  const startAuto = () => { if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; auto = setInterval(() => show(order[(order.indexOf(current) + 1) % order.length]), 4500); };
+  document.querySelectorAll('.dock button').forEach((b) => b.addEventListener('click', () => { clearInterval(auto); show(b.dataset.k); }));
+  startAuto();
+
+  // live facts from GitHub
+  function renderMeta() {
+    const m = document.getElementById('meta'), s = document.getElementById('stats');
+    if (!release) return;
+    const d = new Date(release.date).toLocaleDateString(lang === 'it' ? 'it-IT' : 'en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    m.textContent = t('metaV').replace('{v}', release.v).replace('{d}', d);
+    s.innerHTML = `<div class="stat"><b>${release.stars}</b><span>${t('stars')}</span></div><div class="stat"><b>${release.v}</b><span>${t('version')}</span></div><div class="stat"><b>5</b><span>${t('langs')}</span></div>`;
+  }
+  Promise.all([
+    fetch('https://api.github.com/repos/Peppe37/oink/releases/latest').then((r) => r.ok ? r.json() : null),
+    fetch('https://api.github.com/repos/Peppe37/oink').then((r) => r.ok ? r.json() : null),
+  ]).then(([rel, repo]) => {
+    if (!rel || !repo) return;
+    release = { v: (rel.tag_name || '').replace(/^v/, ''), date: rel.published_at, stars: repo.stargazers_count };
+    renderMeta();
+  }).catch(() => {});
+
+  // reveal on scroll
+  const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { rootMargin: '0px 0px -8% 0px' }) : null;
+  document.querySelectorAll('.rv').forEach((el) => io ? io.observe(el) : el.classList.add('in'));
+  apply();
+})();
+</script>
+<script defer src="https://stats.giulapi.dev/script.js" data-website-id="ce898fbd-9d11-4589-a39b-ce5f1ec42d46" data-domains="oink.giulapi.dev" data-do-not-track="true"></script>
+</body>
+</html>

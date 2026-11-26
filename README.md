@@ -14,6 +14,8 @@ month. Any AI provider works, or none at all.
   <img src="docs/activity-mobile.jpg" width="26%" alt="Oink activity on a phone">
 </p>
 
+Website: **[oink.giulapi.dev](https://oink.giulapi.dev)**
+
 ## What it does
 
 - **Everyone gets their own Oink.** People sign up by themselves (or get a one-time link).
