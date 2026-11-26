@@ -130,9 +130,13 @@ async def plan_positions(db: Session, user: User) -> dict[int, dict[str, Any]]:
     """Per plan: executions seen, money invested, units bought (from each day's close)."""
     out: dict[int, dict[str, Any]] = {}
     for plan in db.scalars(select(Plan).where(Plan.user_id == user.id)):
+        # only money that left the account is a purchase: a credit tied to a plan (a refund, a
+        # sale) is never negative investment, it is simply not an execution of the plan
         txs = list(
             db.scalars(
-                select(Transaction).where(Transaction.plan_id == plan.id).order_by(Transaction.day)
+                select(Transaction)
+                .where(Transaction.plan_id == plan.id, Transaction.amount < 0)
+                .order_by(Transaction.day)
             )
         )
         invested = sum((-from_minor(t.amount, t.currency) for t in txs), Decimal(0))
@@ -322,6 +326,8 @@ def suggestions(db: Session, user: User, today: date | None = None) -> list[dict
 
 def link_purchase(db: Session, tx: Transaction, plan: Plan) -> None:
     """The person says: this debit is a purchase of that plan."""
+    if tx.amount >= 0:
+        raise ValueError("purchase_must_be_debit")  # money in is never a purchase
     tx.plan_id, tx.category, tx.category_by = plan.id, "investments", "plan"
     if tx.transfer_id is not None:
         from oink.services.transfers import unlink

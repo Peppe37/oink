@@ -77,7 +77,8 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
             plan.currency,
         )
     items: list[dict[str, Any]] = []
-    total = cost_total = 0.0
+    total = cost_total = gain_total = 0.0
+    without_cost: list[str] = []
     synthetic = [
         Holding(
             id=0,
@@ -153,9 +154,17 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
                 else None
             )
         cost = to_base(book, h.cost, h.currency) if h.cost is not None else None
+        if cost is not None and cost < 0:
+            cost = None  # money put in is never below zero: a bad figure is unknown, not a loss
         if value is not None:
             total += value
-            cost_total += cost or 0.0
+            if cost is None:
+                without_cost.append(h.symbol)
+            else:
+                # the gain only compares what has both a value and a cost: a holding with an
+                # unknown cost must not turn its whole value into profit
+                cost_total += cost
+                gain_total += value - cost
         items.append(
             {
                 "id": h.id,
@@ -192,8 +201,11 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
         },
         "currency": book.base,
         "total": round(total, 2),
+        # money put in the positions with a known cost (never negative) and the gain on them
         "cost": round(cost_total, 2),
-        "gain": round(total - cost_total, 2) if cost_total else None,
+        "gain": round(gain_total, 2) if cost_total else None,
+        "gain_complete": not without_cost,
+        "without_cost": without_cost,
         "by_kind": {k: round(v, 2) for k, v in by_kind.items()},
         "items": items,
     }
@@ -297,6 +309,15 @@ async def picture(db: Session, book: Book) -> dict[str, Any]:
         "liquid": round(liquid, 2),
         "investments": invest["total"],
         "investments_by_kind": invest["by_kind"],
+        # money put in (never below zero) and what it is worth against it; a loss is a negative
+        # gain, never negative money invested
+        "investments_cost": max(0.0, invest["cost"]),
+        "investments_gain": invest["gain"],
+        "investments_data_quality": {
+            "gain_complete": invest["gain_complete"],
+            "positions_without_cost": invest["without_cost"],
+            "purchases_without_security": invest["unassigned_debits"],
+        },
         "emergency_months": round(liquid / spending, 1) if spending else None,
         "fixed_costs_monthly": fixed["monthly"],
         "fixed_share_of_income": round(fixed["monthly"] / life["income"], 3)
@@ -310,6 +331,7 @@ async def picture(db: Session, book: Book) -> dict[str, Any]:
                 "currency": p.currency,
                 "frequency": p.frequency,
                 "since": p.start.isoformat(),
+                "next_execution": ne.isoformat() if (ne := next_execution(p)) else None,
             }
             for p in plans
         ],

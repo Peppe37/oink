@@ -50,6 +50,14 @@ def _dec(value: str | float | None, field: str) -> Decimal | None:
         raise HTTPException(422, f"{field}_invalid") from exc
 
 
+def _non_negative(value: str | float | None, field: str) -> Decimal | None:
+    """Amounts someone typed in for a position: invested money and units are never below zero."""
+    number = _dec(value, field)
+    if number is not None and (number < 0 or not number.is_finite()):
+        raise HTTPException(422, f"{field}_negative")
+    return number
+
+
 def _ai(request: Request) -> AI:
     ai: AI = request.app.state.ai
     return ai
@@ -132,9 +140,9 @@ async def add_holding(
         name=(name or symbol)[:160],
         kind=body.kind,
         currency=currency,
-        quantity=_dec(body.quantity, "quantity") or Decimal(0),
-        cost=_dec(body.cost, "cost"),
-        manual_price=_dec(body.manual_price, "price"),
+        quantity=_non_negative(body.quantity, "quantity") or Decimal(0),
+        cost=_non_negative(body.cost, "cost"),
+        manual_price=_non_negative(body.manual_price, "price"),
     )
     db.add(h)
     db.commit()
@@ -157,11 +165,8 @@ def update_holding(
     data = body.model_dump(exclude_unset=True)
     for key in ("quantity", "cost", "manual_price"):
         if key in data:
-            setattr(
-                h,
-                key,
-                _dec(data[key], key) if key != "quantity" else _dec(data[key], key) or Decimal(0),
-            )
+            number = _non_negative(data[key], key)
+            setattr(h, key, number if key != "quantity" else number or Decimal(0))
     if data.get("name"):
         h.name = data["name"][:160]
     db.commit()
@@ -245,7 +250,10 @@ def mark_purchase(
         plan.account_id = tx.account_id  # now Oink knows where this plan is paid from
     if plan.day is None:
         plan.day = tx.day.day
-    link_purchase(db, tx, plan)
+    try:
+        link_purchase(db, tx, plan)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     match_executions(db, who.user)  # the plan's other months follow
     return {"ok": True, "plan_id": plan.id}
 

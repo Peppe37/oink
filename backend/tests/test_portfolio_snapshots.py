@@ -238,3 +238,80 @@ async def test_value_only_screenshot_is_kept_as_a_dated_value_without_invented_u
         )
         assert values["gain"] is None
         assert acc.balance == 10000
+
+
+async def test_money_invested_is_never_negative_and_gaps_never_become_profit(
+    owner: TestClient,
+    monkeypatch: Any,
+) -> None:
+    async def closes(*args: Any, **kwargs: Any) -> dict[date, Decimal]:
+        return {date(2026, 11, 16): Decimal(100)}
+
+    monkeypatch.setattr("oink.services.plans.daily_closes", closes)
+    account = owner.post("/api/accounts", json={"name": "Broker", "balance": "100"}).json()["id"]
+    with owner.app.state.db.sessions() as db:  # type: ignore[attr-defined]
+        acc = db.get(Account, account)
+        user = db.get(User, acc.user_id)
+        plan = Plan(
+            user_id=user.id, symbol="AAA", amount=Decimal(100), start=date(2026, 11, 16),
+            account_id=account, currency="EUR",
+        )  # fmt: skip
+        db.add(plan)
+        db.flush()
+        # a purchase of 100 and a credit of 180 wrongly tied to the same plan
+        for amount, key in ((-10000, "buy"), (18000, "credit")):
+            db.add(
+                Transaction(
+                    user_id=user.id,
+                    account_id=account,
+                    plan_id=plan.id,
+                    day=date(2026, 11, 16),
+                    amount=amount,
+                    currency="EUR",
+                    description="x",
+                    fingerprint=key,
+                )
+            )
+        db.add(Quote(symbol="AAA", currency="EUR", price=Decimal(100)))
+        # a held security with a bad (negative) cost and one with no cost at all
+        db.add(Holding(user_id=user.id, symbol="BBB", name="B", currency="EUR",
+                       quantity=Decimal(1), cost=Decimal(-80), manual_price=Decimal(50)))  # fmt: skip
+        db.add(Holding(user_id=user.id, symbol="CCC", name="C", currency="EUR",
+                       quantity=Decimal(2), manual_price=Decimal(30)))  # fmt: skip
+        db.commit()
+        positions = await plan_positions(db, user)
+        assert Decimal(positions[plan.id]["invested"]) == Decimal(100)
+        assert positions[plan.id]["executions"] == 1
+        values = await holdings_value(db, Book.of(db, user), refresh=False)
+    assert values["cost"] == 100.0  # only what has a known, non-negative cost
+    assert values["gain"] == 0.0  # BBB and CCC value is not profit
+    assert values["gain_complete"] is False
+    assert sorted(values["without_cost"]) == ["BBB", "CCC"]
+    assert all(i["cost"] is None or i["cost"] >= 0 for i in values["items"])
+
+
+def test_an_incoming_movement_is_not_a_purchase_and_negative_amounts_are_refused(
+    owner: TestClient,
+) -> None:
+    account = owner.post("/api/accounts", json={"name": "Broker", "balance": "0"}).json()["id"]
+    with owner.app.state.db.sessions() as db:  # type: ignore[attr-defined]
+        acc = db.get(Account, account)
+        plan = Plan(
+            user_id=acc.user_id, symbol="AAA", amount=Decimal(100), start=date(2026, 11, 16),
+            account_id=account, currency="EUR",
+        )  # fmt: skip
+        db.add(plan)
+        db.flush()
+        tx = Transaction(
+            user_id=acc.user_id, account_id=account, day=date(2026, 11, 20), amount=18000,
+            currency="EUR", description="sale", fingerprint="sale",
+        )  # fmt: skip
+        db.add(tx)
+        db.commit()
+        plan_id, tx_id = plan.id, tx.id
+    assert (
+        owner.post(f"/api/transactions/{tx_id}/plan", json={"plan_id": plan_id}).status_code == 422
+    )
+    for field in ("quantity", "cost"):
+        body = {"symbol": "XYZ", "manual_price": "10", "quantity": "1", field: "-5"}
+        assert owner.post("/api/holdings", json=body).status_code == 422
