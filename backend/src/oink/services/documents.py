@@ -30,6 +30,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from oink.core.db import Account, Document, Transaction, User
+from oink.services import layouts
 from oink.services.ai import AI, AIError
 from oink.services.importer import (
     ImportError_,
@@ -597,6 +598,19 @@ async def read_file(filename: str, raw: bytes, ai: AI, stores: Stores | None) ->
     return Extraction(await extract_text(filename, raw, ai), [], False)
 
 
+async def known_layout(filename: str, raw: bytes) -> tuple[layouts.Layout, str] | None:
+    """A bank statement whose layout Oink knows, read from the PDF's own text (no Docling),
+    with that text."""
+    if not filename.lower().endswith(".pdf"):
+        return None
+    try:
+        text = await asyncio.to_thread(pdf_text, raw)
+    except ImportError_:
+        return None
+    found = layouts.read(text)
+    return (found, text) if found is not None else None
+
+
 def statement_rows(doc: Document, raw: bytes, extraction: Extraction) -> tuple[list[Row], bool]:
     """Movements read by rules: the bank's export as it is, or the statement's tables."""
     name = doc.filename.lower()
@@ -679,15 +693,24 @@ async def process(
     the document ends «ready», «review» (with what to look at) or «error»."""
     wanted = dict(doc.review or {})
     kind, account_id = wanted.get("wanted_kind"), wanted.get("account_id")
+    known = await known_layout(doc.filename, raw)
+    layout = known[0] if known else None
     try:
-        extraction = await read_file(doc.filename, raw, ai, stores)
+        extraction = (
+            Extraction(known[1], [], False)
+            if known
+            else await read_file(doc.filename, raw, ai, stores)
+        )
     except DocumentError as exc:
         doc.status, doc.review = "error", {**wishes(doc), "error": exc.code}
         db.commit()
         return None
     body = extraction.text
     doc.text = body
-    doc.kind = kind or guess_kind(doc.filename, body)
+    doc.kind = kind or ("statement" if layout is not None else guess_kind(doc.filename, body))
+    if layout is not None:
+        doc.issuer = layout.bank
+        doc.title = f"{layout.bank} · {layout.period}" if layout.period else doc.title
     doc.doc_date = guess_date(body)
     if body.strip() and ai.can_read_text:  # words for people: title, issuer, summary
         try:
@@ -699,7 +722,10 @@ async def process(
     verdict: Verdict | None = None
     outcome: Outcome | None = None
     rows: list[Row] = []
-    if doc.kind == "statement":
+    if doc.kind == "statement" and layout is not None:
+        rows = layout.rows
+        verdict = check_statement(rows, body, False, (layout.opening, layout.closing))
+    elif doc.kind == "statement":
         rows, structured = statement_rows(doc, raw, extraction)
         verdict = check_statement(rows, body, structured)
     elif doc.kind == "payslip":
@@ -712,9 +738,13 @@ async def process(
         review.update(verdict.as_dict())
     if rows:
         review["rows"] = [
-            [r.day.isoformat(), str(r.amount), r.description, r.counterparty] for r in rows
+            [r.day.isoformat(), str(r.amount), r.description, r.counterparty, r.category]
+            for r in rows
         ]
-        review["ibans"] = find_ibans(body)
+        review["ibans"] = layout.ibans if layout is not None else find_ibans(body)
+    if layout is not None:
+        review["layout"] = {"bank": layout.bank, "skipped": layout.skipped,
+                            "trades": layout.trades, "savings": len(layout.savings)}  # fmt: skip
     doc.review = review
     doc.status = "review" if verdict is not None and verdict.status == "review" else "ready"
     if doc.kind == "statement" and rows and wanted.get("import", True) and doc.status == "ready":
@@ -852,7 +882,12 @@ def _own_account(db: Session, user: User, account_id: int) -> Account:
 
 def parsed_of(doc: Document) -> Parsed:
     review = doc.review or {}
-    rows = [Row(date.fromisoformat(d), Decimal(a), t, c) for d, a, t, c in review.get("rows", [])]
+    rows = [
+        Row(
+            date.fromisoformat(r[0]), Decimal(r[1]), r[2], r[3], category=r[4] if len(r) > 4 else ""
+        )
+        for r in review.get("rows", [])
+    ]
     closing = (doc.facts or {}).get("closing_balance")
     return Parsed(
         rows,

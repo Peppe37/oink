@@ -85,6 +85,7 @@ export type DocCheck = { name: string; ok: boolean | null; detail: Record<string
 export type DocReview = {
   checks?: DocCheck[]; movements: number; account_warning?: { code: string; found?: string; suggested?: number | null } | null; engine?: boolean; confirmed?: boolean; dismissed?: boolean; error?: string;
   ai?: { explanation?: string; suggestions?: string[]; confidence?: string };
+  layout?: { bank: string; skipped: string[]; trades: { day: string; isin: string; name: string; quantity: string; amount: string }[]; savings: number };
 };
 export type DocUpload = Doc & { duplicate: boolean; import: ImportResult | null };
 export type DocSource = { n: number; document_id: number; title: string; date: string | null; snippet: string };

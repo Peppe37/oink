@@ -735,6 +735,11 @@ export const en = {
   "error.signup_closed": "Sign-up is closed: ask the admin for an invite.",
   "error.password_change_required": "Change the temporary password first.",
   "error.admin_has_no_finances": "The admin handles no money: use a personal account.",
+  "docs.layout": "{bank} statement recognised: read line by line from the PDF's text, every balance checked.",
+  "docs.layoutSavings": "{count} moves to or from the savings deposit are marked as savings, not spending.",
+  "docs.layoutTrades": "{count} securities purchases with ISIN and quantity (savings plans).",
+  "docs.layoutSkipped": "Not imported: {what}.",
+  "docs.layoutDeposit": "savings deposit",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

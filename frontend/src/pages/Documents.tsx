@@ -281,6 +281,14 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
           </div>
         )}
         {!doc.has_text && doc.status !== "processing" && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
+        {doc.review.layout && (
+          <p className="note">
+            <Icon name="shield" size={18} /> {t("docs.layout", { bank: doc.review.layout.bank })}
+            {doc.review.layout.savings > 0 && <> {t("docs.layoutSavings", { count: doc.review.layout.savings })}</>}
+            {doc.review.layout.trades.length > 0 && <> {t("docs.layoutTrades", { count: doc.review.layout.trades.length })}</>}
+            {doc.review.layout.skipped.length > 0 && <> {t("docs.layoutSkipped", { what: doc.review.layout.skipped.map((x) => x === "deposit" ? t("docs.layoutDeposit") : x).join(", ") })}</>}
+          </p>
+        )}
         {doc.summary && <div><h4 className="section-label">{t("docs.summary")}</h4><p style={{ margin: 0 }}>{doc.summary}</p></div>}
         {doc.import_note === "account_not_recognised" && doc.facts.proposed_account && (
           <NewAccountCard doc={doc} proposed={doc.facts.proposed_account} notify={notify} onDone={async () => onChanged(await api.document(doc.id))} />

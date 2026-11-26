@@ -733,4 +733,9 @@ export const de: Dict = {
   "error.signup_closed": "Registrierung geschlossen: frag den Admin nach einer Einladung.",
   "error.password_change_required": "Ändere zuerst das vorläufige Passwort.",
   "error.admin_has_no_finances": "Der Admin verwaltet kein Geld: nutze ein persönliches Konto.",
+  "docs.layout": "{bank}-Auszug erkannt: Zeile für Zeile aus dem PDF-Text gelesen, jeder Saldo geprüft.",
+  "docs.layoutSavings": "{count} Umbuchungen vom/zum Sparkonto gelten als Ersparnis, nicht als Ausgabe.",
+  "docs.layoutTrades": "{count} Wertpapierkäufe mit ISIN und Stückzahl (Sparpläne).",
+  "docs.layoutSkipped": "Nicht importiert: {what}.",
+  "docs.layoutDeposit": "Sparkonto",
 };

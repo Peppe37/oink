@@ -733,4 +733,9 @@ export const it: Dict = {
   "error.signup_closed": "La registrazione è chiusa: chiedi un invito all'amministratore.",
   "error.password_change_required": "Prima cambia la password provvisoria.",
   "error.admin_has_no_finances": "L'amministratore non gestisce soldi: usa un account personale.",
+  "docs.layout": "Estratto {bank} riconosciuto: letto riga per riga dal testo del PDF, con ogni saldo controllato.",
+  "docs.layoutSavings": "{count} movimenti verso o dal conto deposito sono segnati come risparmi, non spese.",
+  "docs.layoutTrades": "{count} acquisti di titoli con ISIN e quote (piani di accumulo).",
+  "docs.layoutSkipped": "Non importati: {what}.",
+  "docs.layoutDeposit": "conto deposito",
 };

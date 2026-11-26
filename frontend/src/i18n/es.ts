@@ -733,4 +733,9 @@ export const es: Dict = {
   "error.signup_closed": "El registro está cerrado: pide una invitación al admin.",
   "error.password_change_required": "Cambia primero la contraseña provisional.",
   "error.admin_has_no_finances": "El admin no gestiona dinero: usa una cuenta personal.",
+  "docs.layout": "Extracto de {bank} reconocido: leído línea a línea del texto del PDF, cada saldo comprobado.",
+  "docs.layoutSavings": "{count} movimientos hacia o desde el depósito cuentan como ahorro, no como gasto.",
+  "docs.layoutTrades": "{count} compras de valores con ISIN y cantidad (planes de ahorro).",
+  "docs.layoutSkipped": "No importados: {what}.",
+  "docs.layoutDeposit": "depósito",
 };

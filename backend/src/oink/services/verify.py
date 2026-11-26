@@ -118,10 +118,15 @@ def balances(text: str) -> tuple[Decimal | None, Decimal | None]:
     return _amount(OPENING, text), _amount(CLOSING, text, last=True)
 
 
-def check_statement(rows: list[Row], text: str, structured: bool) -> Verdict:
+def check_statement(
+    rows: list[Row], text: str, structured: bool,
+    known: tuple[Decimal | None, Decimal | None] | None = None,
+) -> Verdict:  # fmt: skip
+    """`known`: opening and closing balance from a reader that knows the layout (a statement
+    with several accounts prints several «opening balance»: the text rules can't tell)."""
     if not rows:
         return Verdict("review", [Check("statement_found", False, {"reason": "no_movements"})])
-    opening, closing = balances(text)
+    opening, closing = known if known is not None else balances(text)
     total = sum((r.amount for r in rows), Decimal(0))
     facts = {"movements": str(len(rows)), "sum": str(total)}
     if opening is not None:

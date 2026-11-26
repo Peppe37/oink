@@ -55,6 +55,7 @@ plugins = ["pydantic.mypy"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/oink/demo.py" = ["E501"]
+"src/oink/services/layouts.py" = ["E501"]  # bank layouts: long patterns read better on one line
 "tests/*" = ["E501"]
 "src/oink/api/mcp.py" = ["E501"]
 "src/oink/api/planning.py" = ["E501"]

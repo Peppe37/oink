@@ -733,4 +733,9 @@ export const fr: Dict = {
   "error.signup_closed": "Inscription fermée : demandez une invitation à l'admin.",
   "error.password_change_required": "Changez d'abord le mot de passe provisoire.",
   "error.admin_has_no_finances": "L'admin ne gère pas d'argent : utilisez un compte personnel.",
+  "docs.layout": "Relevé {bank} reconnu : lu ligne par ligne depuis le texte du PDF, chaque solde vérifié.",
+  "docs.layoutSavings": "{count} mouvements vers ou depuis l'épargne sont marqués comme épargne, pas comme dépenses.",
+  "docs.layoutTrades": "{count} achats de titres avec ISIN et quantité (plans d'épargne).",
+  "docs.layoutSkipped": "Non importés : {what}.",
+  "docs.layoutDeposit": "compte épargne",
 };

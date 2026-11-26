@@ -74,6 +74,7 @@ class Row:
     description: str
     counterparty: str = ""
     external_id: str = ""
+    category: str = ""  # set by a reader that knows (Revolut: moves to its savings deposit)
 
 
 @dataclass
@@ -95,6 +96,7 @@ class Parsed:
                         description=r.description or r.counterparty or "—",
                         counterparty=r.counterparty,
                         external_id=r.external_id,
+                        category=r.category,
                     )
                 )
         return out
@@ -127,10 +129,20 @@ def valid_iban(candidate: str) -> bool:
     return int(digits) % 97 == 1
 
 
+#: IBAN length by country: the regex may run into the next word («…8928 Data» → «…8928DATA»)
+IBAN_LENGTH = {
+    "IT": 27, "SM": 27, "FR": 27, "MC": 27, "DE": 22, "IE": 22, "GB": 22, "ES": 24, "PT": 25,
+    "NL": 18, "BE": 16, "LT": 20, "LU": 20, "AT": 20, "CH": 21, "DK": 18, "FI": 18, "SE": 24,
+    "NO": 15, "PL": 28, "CZ": 24, "GR": 27, "HR": 21, "SI": 19, "SK": 24, "EE": 20, "LV": 21,
+}  # fmt: skip
+
+
 def find_ibans(text: str) -> list[str]:
     found = []
     for match in IBAN.finditer(text.upper()):
         iban = match.group(1).replace(" ", "")
+        if (size := IBAN_LENGTH.get(iban[:2])) is not None:
+            iban = iban[:size]
         # the regex may run into the next word: shorten until the checksum matches
         for end in range(len(iban), 14, -1):
             if valid_iban(iban[:end]):
