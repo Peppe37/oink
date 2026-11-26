@@ -32,7 +32,8 @@ OUT_HEADERS = ("uscite", "addebiti", "dare", "debit", "addebito", "soll", "débi
 IN_HEADERS = ("entrate", "accrediti", "avere", "credit", "accredito", "haben", "crédit", "abono")
 TEXT_HEADERS = ("descrizione", "descrizione operazione", "causale", "description", "dettagli",
                 "details", "concetto", "operazione", "verwendungszweck", "buchungstext",
-                "libellé", "libelle", "reference")  # fmt: skip
+                "libellé", "libelle", "reference", "tx_type", "transaction type", "tipo",
+                "type")  # fmt: skip
 PARTY_HEADERS = ("beneficiario", "controparte", "esercente", "payee", "merchant", "ordinante",
                  "empfänger", "auftraggeber", "bénéficiaire", "counterparty")  # fmt: skip
 DATE_FORMATS = ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%d.%m.%y",

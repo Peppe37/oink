@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -41,6 +42,27 @@ SECURITY_HEADERS = {
 }
 
 
+def _tidy(session: Any) -> None:
+    """At start: categories worked out again with today's rules, and the whole history
+    paired (transfers between own accounts, money the person paid in themself). Idempotent;
+    a failure here never stops the app."""
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from oink.core.db import User
+    from oink.services.ledger import refresh_categories
+    from oink.services.transfers import match_transfers
+
+    for user in session.scalars(select(User).where(User.is_admin.is_(False))):
+        try:
+            refresh_categories(session, user.id)
+            match_transfers(session, user, since=date(2000, 1, 1))
+        except Exception:
+            session.rollback()
+            logging.getLogger("oink").exception("tidy-up of %s failed", user.username)
+
+
 def create_app(settings: Settings | None = None, *, background: bool = True) -> FastAPI:
     settings = settings or get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +71,7 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     vault = Vault(settings.secret_key, settings.data_dir)
     with db.sessions() as session:
         ensure_admin(session, settings.admin_username, settings.admin_password)
+        _tidy(session)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

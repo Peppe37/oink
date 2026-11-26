@@ -384,8 +384,9 @@ def test_the_review_proposes_fixed_costs_and_categories(owner: TestClient) -> No
     assert [(f["name"], f["amount"], f["frequency"]) for f in reply["fixed"]] == [
         ("Ovhcloud", "7.92", "monthly")
     ]
-    groceries = next(c for c in reply["categories"] if c["tx_id"] == lone["id"])
-    assert groceries["proposed"] == "groceries" and groceries["reason"] == "same_payee"
+    # the second Esselunga took its payee's category by itself: nothing left to propose
+    assert lone["category"] == "groceries" and lone["category_by"] == "payee"
+    assert not any(c["tx_id"] == lone["id"] for c in reply["categories"])
 
 
 def test_fixed_costs_follow_their_payments_and_flag_a_missing_one(owner: TestClient) -> None:

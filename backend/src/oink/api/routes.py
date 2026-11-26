@@ -107,6 +107,7 @@ from oink.services.ledger import (
     add_movements,
     learn_name,
     learn_rule,
+    refresh_categories,
 )
 from oink.services.review import review
 from oink.services.statements import MAX_FILE, apply, pick_account
@@ -855,7 +856,8 @@ def untracked_transfers(
 def rematch_transfers(
     who: Caller = Depends(require("transactions:write")), db: Session = Depends(get_db)
 ) -> dict[str, int]:
-    return {"paired": match_transfers(db, who.user)}
+    fixed = refresh_categories(db, who.user_id)
+    return {"paired": match_transfers(db, who.user, since=date(2000, 1, 1)), **fixed}
 
 
 @api.get("/categories")

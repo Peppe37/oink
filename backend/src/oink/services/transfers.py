@@ -6,7 +6,8 @@ other. Neither is spending nor income. Oink pairs the two legs deterministically
 - opposite amounts (same currency: exact; different currencies: within 2% at today's rate),
 - within four days of each other, on two different accounts of the same person,
 - and at least one side worded like a transfer («giroconto», «bonifico», «top up», «to
-  Trade Republic», the other account's IBAN or name, the person's own full name),
+  Trade Republic», the other account's IBAN or name, the person's own full name — from the
+  profile or as printed on their statements),
 - and only one candidate left: when two legs could match equally well, nothing is paired.
 
 Both legs become category `transfers` (or keep `savings`/`investments` if they had it),
@@ -16,7 +17,11 @@ money around never looks like losing it.
 
 An outgoing transfer to one of your own institutions that is not in Oink yet (e.g. to Trade
 Republic when only Revolut is tracked) is also a transfer, without a partner: Oink lists
-these so the account can be added, instead of counting them as spending."""
+these so the account can be added, instead of counting them as spending.
+
+Money coming in from the person themself is not income either, even without a partner in
+Oink: a transfer from their own name or IBAN, a top-up from their own card (Google Pay,
+Apple Pay), cash paid in at the bank, a deposit on an exchange or broker account."""
 
 from __future__ import annotations
 
@@ -62,14 +67,46 @@ def _compact(iban: str) -> str:
     return re.sub(r"\s", "", iban).lower()
 
 
+#: money a person pays in themself: a top-up from their own card, cash at the bank
+OWN_IN = re.compile(
+    r"\b(ricarica di (google|apple) pay|top.?up (by|with|from) card|money added from"
+    r"|added from card|vers(amento)?\.? ?(contanti|cont\.|sport)|cash deposit"
+    r"|deposito contanti|bareinzahlung|^ deposito $"
+    r"|dépôt d'espèces|ingreso en efectivo)",
+)
+#: on an exchange or broker account, money in or out is the person's own
+BROKER_MOVES = re.compile(r"\b(deposit|withdrawal|deposito|prelievo|versamento|bonifico)\b")
+
+
 class Owner:
     """What identifies a person's own accounts in the wording of a movement."""
 
-    def __init__(self, user: User, accounts: Iterable[Account]) -> None:
+    def __init__(
+        self, user: User, accounts: Iterable[Account], holders: Iterable[str] = ()
+    ) -> None:
         self.accounts = {a.id: a for a in accounts}
         self.ibans = {_compact(a.iban): a.id for a in self.accounts.values() if len(a.iban) > 10}
-        parts = [p for p in normalise(user.name or "").split() if len(p) > 1]
-        self.full_name = " ".join(parts) if len(parts) >= 2 else ""
+        self.names: list[str] = []
+        for raw in [user.name or "", *holders]:
+            parts = [p for p in normalise(raw).split() if len(p) > 1]
+            if len(parts) >= 2:  # «Giuseppe Lapietra» and «Lapietra Giuseppe»
+                for name in (" ".join(parts), " ".join(reversed(parts))):
+                    if name not in self.names:
+                        self.names.append(name)
+        self.full_name = self.names[0] if self.names else ""
+
+    def own_name(self, text: str) -> bool:
+        return any(n in text for n in self.names)
+
+    def money_in(self, t: Transaction) -> bool:
+        """Money the person paid in themself, with no partner leg in Oink."""
+        text = _text(t)
+        if self.own_name(text) or any(i in text.replace(" ", "") for i in self.ibans):
+            return True
+        if OWN_IN.search(text):
+            return True
+        acc = self.accounts.get(t.account_id)
+        return bool(acc and acc.kind in ("crypto", "investment") and BROKER_MOVES.search(text))
 
     def names_of(self, account_id: int) -> list[str]:
         acc = self.accounts.get(account_id)
@@ -82,7 +119,7 @@ class Owner:
         compact = text.replace(" ", "")
         if any(iban in compact for iban in self.ibans):
             return True
-        if self.full_name and self.full_name in text:
+        if self.own_name(text):
             return True
         worded = any(h in text for h in HINTS)
         if other is not None and worded and any(n in text for n in self.names_of(other)):
@@ -98,7 +135,7 @@ class Owner:
         for iban, acc_id in self.ibans.items():
             if iban in compact:
                 return self.accounts[acc_id].institution or self.accounts[acc_id].name
-        if self.full_name and self.full_name in text:
+        if self.own_name(text):
             return "?"
         here = self.accounts.get(t.account_id)
         own_here = normalise(f"{here.institution} {here.name}") if here else ""
@@ -138,7 +175,7 @@ def match_transfers(db: Session, user: User, since: date | None = None) -> int:
     accounts = list(db.scalars(select(Account).where(Account.user_id == user.id)))
     if len(accounts) == 0:
         return 0
-    owner = Owner(user, accounts)
+    owner = Owner(user, accounts, holders(db, user))
     start = since or (date.today() - LOOKBACK)
     txs = [
         t
@@ -185,8 +222,25 @@ def match_transfers(db: Session, user: User, since: date | None = None) -> int:
             continue
         if owner.institution(out):
             _mark(out, None)
+    # money paid in by the person themself (their name, their card, cash at the bank)
+    for inn in ins:
+        free = inn.transfer_id is None and inn.category_by not in ("user", "transfer")
+        if inn.day >= start and free and owner.money_in(inn):
+            _mark(inn, None)
     db.commit()
     return paired
+
+
+def holders(db: Session, user: User) -> list[str]:
+    """Account holders printed on this person's statements."""
+    from oink.core.db import Document
+
+    out = []
+    for facts in db.scalars(select(Document.facts).where(Document.user_id == user.id)):
+        name = (facts or {}).get("account_holder") if isinstance(facts, dict) else None
+        if isinstance(name, str) and name.strip() and name.strip() not in out:
+            out.append(name.strip())
+    return out
 
 
 def unlink(db: Session, tx: Transaction) -> None:
@@ -212,7 +266,7 @@ class Untracked:
 def untracked(db: Session, user: User, since: date | None = None) -> list[dict[str, object]]:
     """Money sent to own institutions that are not in Oink yet, grouped by institution."""
     accounts = list(db.scalars(select(Account).where(Account.user_id == user.id)))
-    owner = Owner(user, accounts)
+    owner = Owner(user, accounts, holders(db, user))
     start = since or (date.today() - timedelta(days=90))
     totals: dict[tuple[str, str], Untracked] = {}
     for t in db.scalars(

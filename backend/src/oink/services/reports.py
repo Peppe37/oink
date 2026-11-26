@@ -77,6 +77,11 @@ class Book:
                 out.append((t, v))
         return out
 
+    def trading_accounts(self) -> set[int]:
+        """Crypto and investment accounts: what moves there is buying and selling, not
+        income or spending (their value is in net worth)."""
+        return {a.id for a in self.accounts() if a.kind in ("crypto", "investment")}
+
     def accounts(self) -> list[Account]:
         return list(
             self.db.scalars(
@@ -94,8 +99,10 @@ def _r(value: float) -> float:
 def month_summary(book: Book, month: str) -> dict[str, Any]:
     start, end = month_bounds(month)
     rows = book.rows(start, end)
-    spending = [(t, v) for t, v in rows if v < 0 and t.category not in INTERNAL]
-    income = [(t, v) for t, v in rows if v > 0 and t.category not in INTERNAL]
+    trading = book.trading_accounts()
+    real = [(t, v) for t, v in rows if t.category not in INTERNAL and t.account_id not in trading]
+    spending = [(t, v) for t, v in real if v < 0]
+    income = [(t, v) for t, v in real if v > 0]
     by_category: dict[str, float] = defaultdict(float)
     by_merchant: dict[str, float] = defaultdict(float)
     for t, v in spending:

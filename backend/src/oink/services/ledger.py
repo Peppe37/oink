@@ -98,7 +98,12 @@ def rule_category(rules: list[Rule], text: str) -> str:
     if found is not None:
         return found.category
     low = f" {normalise(text)} "
-    return next((cat for cat, words in BUILTIN.items() if any(w in low for w in words)), "")
+    # a word starts where another ends: «presso» (at, in an ATM's wording) is not «Esso»
+    return next(
+        (cat for cat, words in BUILTIN.items()
+         if any(re.search(rf"(?<![a-z0-9]){re.escape(w)}", low) for w in words)),
+        "",
+    )  # fmt: skip
 
 
 _DESCRIPTOR = re.compile(r"^\d{3,}\s")  # «44941 Palo Del Colle - S»: a terminal, not a name
@@ -106,6 +111,67 @@ _DESCRIPTOR = re.compile(r"^\d{3,}\s")  # «44941 Palo Del Colle - S»: a termin
 
 def looks_like_terminal(text: str) -> bool:
     return bool(_DESCRIPTOR.match(text.strip()))
+
+
+#: legal forms and single letters left by «S.R.L.» / «S.p.A.» once punctuation is gone
+_LEGAL = {"spa", "srl", "sas", "snc", "srls", "ltd", "gmbh", "llc", "inc", "ag", "bv", "sa"}
+
+
+def payee_key(text: str) -> str:
+    """A payee without numbers and noise: «GD SERVICES S.R.L.» and «Gd Services» match."""
+    words = [
+        w for w in normalise(text).split()
+        if not any(c.isdigit() for c in w) and w not in _LEGAL and len(w) > 1
+    ]  # fmt: skip
+    return " ".join(words)[:60]
+
+
+def _payee_categories(db: Session, user_id: int) -> dict[str, str]:
+    """The category each payee already has (chosen, by rule or by the AI), latest first:
+    a new movement to the same payee gets it too, deterministically."""
+    out: dict[str, str] = {}
+    for counterparty, description, category in db.execute(
+        select(Transaction.counterparty, Transaction.description, Transaction.category)
+        .where(Transaction.user_id == user_id, Transaction.category != "",
+               Transaction.category_by.in_(("user", "rule", "ai", "payee")))
+        .order_by(Transaction.day)
+    ):  # fmt: skip
+        key = payee_key(counterparty or description)
+        if len(key) >= 4:
+            out[key] = category
+    return out
+
+
+def refresh_categories(db: Session, user_id: int) -> dict[str, int]:
+    """Categories chosen by rules are worked out again with today's rules (a payee wrongly
+    caught by an old keyword is let go), then movements without one take their payee's."""
+    rules = list(db.scalars(select(Rule).where(Rule.user_id == user_id)))
+    fixed = 0
+    for t in db.scalars(
+        select(Transaction).where(Transaction.user_id == user_id, Transaction.category_by == "rule")
+    ):
+        found = rule_category(rules, f"{t.description} {t.counterparty}")
+        if found != t.category:
+            t.category, t.category_by = found, ("rule" if found else "")
+            fixed += 1
+    db.commit()
+    return {"rules": fixed, "payees": inherit_categories(db, user_id)}
+
+
+def inherit_categories(db: Session, user_id: int) -> int:
+    """Movements still without a category take their payee's: returns how many."""
+    known = _payee_categories(db, user_id)
+    done = 0
+    for t in db.scalars(
+        select(Transaction).where(Transaction.user_id == user_id, Transaction.category == "",
+                                  Transaction.category_by != "split")
+    ):  # fmt: skip
+        found = known.get(payee_key(t.counterparty or t.description))
+        if found:
+            t.category, t.category_by = found, "payee"
+            done += 1
+    db.commit()
+    return done
 
 
 def add_movements(
@@ -165,6 +231,7 @@ def add_movements(
                 m.counterparty.strip()[:200],
             )
 
+    known = _payee_categories(db, account.user_id)
     added, duplicates = [], 0
     for m in movements:
         key = (m.day, m.amount, normalise(m.description))
@@ -199,6 +266,8 @@ def add_movements(
         category, by = m.category, "user" if m.category else ""
         if not category and (found := rule_category(rules, f"{m.description} {m.counterparty}")):
             category, by = found, "rule"
+        if not category and (same_payee := known.get(payee_key(m.counterparty or m.description))):
+            category, by = same_payee, "payee"
         named = rule_for(rules, f"{m.description} {m.counterparty}")
         if named is not None and named.name:
             m.counterparty = named.name

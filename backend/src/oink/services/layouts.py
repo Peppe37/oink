@@ -48,6 +48,8 @@ class Layout:
     skipped: list[str] = field(default_factory=list)
     #: rows that are moves between the person's own accounts at the same bank
     savings: set[int] = field(default_factory=set)
+    #: the account holder as printed (money to or from this name is the person's own)
+    holder: str = ""
 
 
 def _num(text: str) -> Decimal:
@@ -149,7 +151,7 @@ def revolut(text: str) -> Layout | None:
     ibans = find_ibans(printed[1]) if printed else []
     ibans = ibans or [i for i in find_ibans(text) if i[4:9] == "03669"][:1]
     return Layout("Revolut", rows, opening, closing, ibans[:1], period, skipped=skipped,
-                  savings=savings)  # fmt: skip
+                  savings=savings, holder=_holder_after(lines, "Generato il", "Generated on"))  # fmt: skip
 
 
 def _revolut_rows(lines: list[str]) -> tuple[list[Row], list[Decimal], Decimal | None]:
@@ -263,4 +265,26 @@ def trade_republic(text: str) -> Layout | None:
         rf"DATA (\d{{1,2}} (?:{_MON}) \d{{4}}) - (\d{{1,2}} (?:{_MON}) \d{{4}})", text, re.I
     ):
         period = f"{m[1]} – {m[2]}"
-    return Layout("Trade Republic", rows, opening, closing, ibans, period, trades=trades)
+    return Layout(
+        "Trade Republic",
+        rows,
+        opening,
+        closing,
+        ibans,
+        period,
+        trades=trades,
+        holder=_holder_after(lines, "BIC"),
+    )
+
+
+def _holder_after(lines: list[str], *markers: str) -> str:
+    """The holder's name: the first line in capitals after the line that starts with one of
+    `markers` (Revolut: «Generato il …», Trade Republic: «BIC …»)."""
+    for i, line in enumerate(lines):
+        if line.strip().startswith(markers):
+            for nxt in lines[i + 1 : i + 4]:
+                name = nxt.strip()
+                if re.fullmatch(r"[A-ZÀ-Ý' ]{5,60}", name) and len(name.split()) >= 2:
+                    return name.title()
+            return ""
+    return ""

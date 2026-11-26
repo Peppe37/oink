@@ -719,6 +719,8 @@ async def process(
     body = extraction.text
     doc.text = body
     doc.kind = kind or ("statement" if layout is not None else guess_kind(doc.filename, body))
+    if layout is not None and layout.holder:
+        doc.facts = {**(doc.facts or {}), "account_holder": layout.holder}
     if layout is not None and layout.bank:
         doc.issuer = layout.bank
         doc.title = f"{layout.bank} · {layout.period}" if layout.period else doc.title
