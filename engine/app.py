@@ -90,7 +90,11 @@ class Lazy:
         return result
 
     def maybe_unload(self) -> bool:
-        with self._lock:
+        # never wait for the lock: it is held for the whole of a long reading, and waiting
+        # here (on the event loop) froze the engine, health checks and cancel included
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
             if self._proc is not None and time.monotonic() - self._last > IDLE_SECONDS:
                 self._conn.send(("stop", None))
                 self._proc.join(10)
@@ -100,7 +104,9 @@ class Lazy:
                 _trim()
                 log.info("%s unloaded after %ss idle", self.name, IDLE_SECONDS)
                 return True
-        return False
+            return False
+        finally:
+            self._lock.release()
 
     def kill(self) -> bool:
         """Stop the process now, even mid-request (the request fails with «cancelled»)."""
@@ -168,17 +174,20 @@ def _load_converter() -> Any:
 
 
 def has_text_layer(path: str) -> bool:
-    """Every page carries real text (a generated PDF, not a scan)."""
+    """A generated PDF, not a scan: most pages carry real text (a statement may end with an
+    almost empty page, or have a cover that is only a logo)."""
     try:
         import pypdfium2 as pdfium
 
         pdf = pdfium.PdfDocument(path)
         try:
-            for page in pdf:
-                text = page.get_textpage().get_text_range()
-                if len(text.strip()) < 30:
-                    return False
-            return len(pdf) > 0
+            pages = len(pdf)
+            if pages == 0:
+                return False
+            with_text = sum(
+                1 for page in pdf if len(page.get_textpage().get_text_range().strip()) >= 80
+            )
+            return with_text >= max(1, round(pages * 0.6))
         finally:
             pdf.close()
     except Exception:  # unreadable here: let Docling (with OCR) try
@@ -237,6 +246,7 @@ async def embed(body: EmbedIn) -> dict[str, Any]:
 
 def _extract_with(converters: Any, path: str) -> dict[str, Any]:
     text = path.endswith(".pdf") and has_text_layer(path)
+    log.info("reading a %s (%s)", Path(path).suffix, "text layer, no OCR" if text else "with OCR")
     started = time.monotonic()
     doc = converters["text" if text else "ocr"].convert(path).document
     log.info("read %s pages in %.0fs (%s)", len(getattr(doc, "pages", {}) or {}),

@@ -368,6 +368,7 @@ async def stop_document(
     doc = _mine(db, who, doc_id)
     task = _TASKS.pop(doc_id, None)
     if task is not None and not task.done():
+        docs.STOPPING.add(doc_id)
         task.cancel()
     stores = docs.stores_in_use()
     if stores is not None and stores.engine.enabled:

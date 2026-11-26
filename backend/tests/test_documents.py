@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -289,3 +290,43 @@ def test_a_reading_cut_short_can_be_stopped_and_read_again(owner: TestClient) ->
     assert stopped["status"] == "error" and stopped["review"]["error"] == "stopped"
     again = owner.post(f"/api/documents/{doc['id']}/reprocess").json()
     assert again["status"] == "ready" and again["kind"] == "contract"
+
+
+def test_a_shutdown_leaves_the_reading_to_resume_but_stop_ends_it(
+    owner: TestClient, monkeypatch: Any
+) -> None:
+    import asyncio
+
+    from oink.core.db import Document
+    from oink.services import documents as docs
+
+    app = owner.app
+    doc = _upload(owner, "palestra.txt", CONTRACT).json()
+
+    async def forever(*_: Any, **__: Any) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(docs, "process", forever)
+
+    def status_after_cancel(stop: bool) -> str:
+        with app.state.db.sessions() as db:  # type: ignore[attr-defined]
+            db.get(Document, doc["id"]).status = "processing"
+            db.commit()
+
+        async def run() -> None:
+            task = asyncio.create_task(docs.process_later(
+                app.state.db.sessions, doc["id"], app.state.ai, app.state.settings.documents_dir  # type: ignore[attr-defined]
+            ))  # fmt: skip
+            await asyncio.sleep(0.05)
+            if stop:
+                docs.STOPPING.add(doc["id"])
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        asyncio.run(run())
+        with app.state.db.sessions() as db:  # type: ignore[attr-defined]
+            return str(db.get(Document, doc["id"]).status)
+
+    assert status_after_cancel(stop=False) == "processing"  # read again at the next start
+    assert status_after_cancel(stop=True) == "error"

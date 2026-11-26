@@ -730,6 +730,9 @@ async def process(
     return outcome
 
 
+STOPPING: set[int] = set()  # documents the person asked to stop reading
+
+
 def wishes(doc: Document) -> dict[str, Any]:
     """What the person asked at upload (kind, account, import): kept for «read again»."""
     review = doc.review or {}
@@ -745,12 +748,17 @@ async def process_later(sessions: Any, doc_id: int, ai: AI, folder: Path) -> Non
             return
         try:
             await process(db, user, doc, path_of(folder, doc).read_bytes(), ai, stores_in_use())
-        except asyncio.CancelledError:  # «stop» from the app
+        except asyncio.CancelledError:
+            # «Stop» from the app marks it; a shutdown (an update) leaves it «processing»,
+            # so it is read again at the next start
+            log.warning("reading of document %s cancelled (%s)", doc_id,
+                        "stop" if doc_id in STOPPING else "shutdown")  # fmt: skip
             db.rollback()
             doc = db.get(Document, doc_id)
-            if doc is not None and doc.status == "processing":
+            if doc is not None and doc.status == "processing" and doc_id in STOPPING:
                 doc.status, doc.review = "error", {**wishes(doc), "error": "stopped"}
                 db.commit()
+            STOPPING.discard(doc_id)
             raise
         except Exception:  # never leave a document «processing» forever
             log.exception("processing document %s failed", doc_id)
