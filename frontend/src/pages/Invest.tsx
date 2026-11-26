@@ -4,7 +4,7 @@
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, type Account, type Holdings, type PlanItem, type PlanProposal, type SearchHit, type Simulation } from "../api";
+import { api, type Account, type Holdings, type HoldingItem, type PlanItem, type PlanProposal, type SearchHit, type Simulation } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { FanChart, GrowthChart } from "../ui/charts";
@@ -21,8 +21,9 @@ const kindTile = (k: string, size = 40) => { const [i, a, b] = KIND_TILES[k] ?? 
 export function Invest({ notify, currency }: { notify: (s: string) => void; currency: string }) {
   const { t, fmt } = useI18n();
   const errorText = useErrorText();
+  const [viewing, setViewing] = useState<HoldingItem | null>(null);
   const [holdings, setHoldings] = useState<Holdings | null>(null);
-  const [plans, setPlans] = useState<PlanItem[]>([]);
+  const [plans, setPlans] = useState<PlanItem[] | null>(null);
   const [adding, setAdding] = useState<"holding" | "plan" | null>(null);
   const [proposed, setProposed] = useState<PlanProposal[]>([]);
   const [preset, setPreset] = useState<Partial<PlanItem> | null>(null);
@@ -32,8 +33,8 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   const [simFor, setSimFor] = useState<{ symbol: string; monthly: number } | null>(null);
   const load = useCallback(() => {
     api.holdings().then(setHoldings).catch((e) => notify(errorText(e)));
-    api.plans().then(setPlans).catch(() => undefined);
-    api.planProposals().then(setProposed).catch(() => undefined);
+    api.plans().then(setPlans).catch((e) => notify(errorText(e)));
+    api.planProposals().then(setProposed).catch((e) => notify(errorText(e)));
     api.accounts().then(setAccounts).catch(() => undefined);
   }, [notify, errorText]);
   const accept = (p: PlanProposal) => api.addPlan({
@@ -50,10 +51,15 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   }, [params, setParams]);
   useEffect(load, [load]);
   const cur = holdings?.currency ?? currency;
+  const planGroups = Array.from((plans ?? []).reduce((groups, p) => {
+    const key = p.account_id ?? 0;
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+    return groups;
+  }, new Map<number, PlanItem[]>()).entries());
 
   return (
     <motion.div className="page" variants={stagger} initial="hidden" animate="show">
-      <PageHeader title={t("invest.title")} subtitle={holdings ? <span className="num">{fmt.money(holdings.total, cur)}</span> : undefined}
+      <PageHeader title={t("invest.title")} subtitle={holdings ? <span className="num">{t("invest.documentedValue")}: {fmt.money(holdings.total, cur)}</span> : undefined}
         action={<button className="btn" onClick={() => setAdding("holding")}><Icon name="plus" size={18} /> <span className="hide-xs">{t("invest.add")}</span></button>} />
 
       <div className="grid">
@@ -64,6 +70,9 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
               <Empty icon="investments" title={t("invest.empty")} hint={t("invest.emptyHint")} action={<button className="btn" onClick={() => setAdding("holding")}>{t("invest.add")}</button>} />
             ) : (
               <>
+                <p className="note">{t("invest.coverageHint")}</p>
+                {holdings.unassigned_debits?.count > 0 && <p className="note">{t("invest.unassigned", { count: holdings.unassigned_debits.count, amount: fmt.money(holdings.unassigned_debits.total, cur) })}</p>}
+                {holdings.items.some((h) => h.value === null) && <p className="note">{t("home.unknownInvestments", { names: holdings.items.filter((h) => h.value === null).map((h) => h.symbol).join(", ") })}</p>}
                 <div className="stat-row">
                   <div><span className="muted small-text">{t("invest.value")}</span><div className="mid"><Money value={holdings.total} currency={cur} /></div></div>
                   {holdings.gain !== null && (
@@ -73,11 +82,11 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
                 </div>
                 <div className="list">
                   {holdings.items.map((h) => (
-                    <Row key={h.id} icon={kindTile(h.kind)} title={h.name || h.symbol}
-                      detail={<span className="num">{h.symbol} · {fmt.number(Number(h.quantity), 6)} × {h.price ? fmt.money(h.price, h.currency) : "—"}{h.stale ? " ·" : ""}</span>}
+                    <Row key={`${h.id}-${h.symbol}`} icon={kindTile(h.kind)} title={h.name || h.symbol}
+                      detail={<span className="num">{h.symbol} · {h.valuation_source === "snapshot" ? t("invest.snapshotValue", { date: h.as_of ? fmt.date(h.as_of) : "—" }) : `${h.quantity === null ? "—" : fmt.number(Number(h.quantity), 6)} × ${h.price ? fmt.money(h.price, h.currency) : "—"}`}{h.stale ? " ·" : ""}</span>}
                       right={<span className="col-right"><span className="num strong">{fmt.money(h.value, cur)}</span>
                         {h.gain !== null && <span className={`num small-text ${h.gain >= 0 ? "up" : "down"}`}>{fmt.money(h.gain, cur, { sign: true })}</span>}</span>}
-                      onClick={async () => { if (confirm(`${t("common.delete")} ${h.symbol}? ${t("common.confirmDelete")}`)) { await api.deleteHolding(h.id); load(); } }} />
+                      onClick={() => setViewing(h)} />
                   ))}
                 </div>
               </>
@@ -106,20 +115,36 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
                 ))}
               </div>
             )}
-            {plans.length === 0 ? <p className="muted">{t("invest.plansEmpty")}</p> : (
-              <div className="list">
-                {plans.map((p) => (
+            {plans === null ? <Spinner /> : plans.length === 0 ? <p className="muted">{t("invest.plansEmpty")}</p> : (
+              <div className="stack">
+                {planGroups.map(([accountId, components]) => {
+                  const active = components.filter((p) => p.active && p.next_execution);
+                  const sameCurrency = active.every((p) => p.currency === active[0]?.currency);
+                  const sameFrequency = active.every((p) => p.frequency === active[0]?.frequency);
+                  const amount = active.reduce((sum, p) => sum + Number(p.amount), 0);
+                  return <section key={accountId} className="stack">
+                    <h4>{t("invest.onePlan", { account: accounts.find((a) => a.id === accountId)?.name ?? t("invest.plans") })}</h4>
+                    <p className="muted small-text" style={{ margin: 0 }}>{t("invest.components", { count: active.length })}{sameCurrency && sameFrequency && active.length > 0 ? ` · ${fmt.money(amount, active[0].currency)} · ${t(`invest.freq.${active[0].frequency}` as never)}` : ""}</p>
+                    <div className="list">
+                {active.map((p) => (
                   <Row key={p.id} icon={<Tile icon="sync" from="#7ff0c9" to="#0f9e7c" size={36} />} title={p.name || p.symbol}
                     onClick={() => openPlan(p, p)}
                     detail={[`${fmt.money(p.amount, p.currency)} · ${t(`invest.freq.${p.frequency}` as never)}${p.day ? ` · ${t("invest.onDay", { day: p.day })}` : ""}`,
                       p.end ? t("invest.until", { date: fmt.date(p.end, { month: "short", year: "numeric" }) }) : t("invest.since", { date: fmt.date(p.start, { month: "short", year: "numeric" }) }),
-                      p.position?.executions ? t("invest.executions", { count: p.position.executions, units: p.position.units ? fmt.number(Number(p.position.units), 4) : "—" })
+                      p.position?.executions ? t("invest.executions", { count: p.position.executions, units: p.position.units ? fmt.number(Number(p.position.units), 6) : "—" }) + (p.position.units_estimated ? ` · ${t("invest.estimatedUnits")}` : "")
                         : p.account_id ? t("invest.noExecutions") : t("invest.noAccount")].join(" · ")}
-                    right={<span className="row" style={{ gap: 4 }}>
+                    right={<span className="row" style={{ gap: 4 }} onClick={(e) => e.stopPropagation()}>
                       <button className="btn ghost small" onClick={() => setSimFor({ symbol: p.symbol, monthly: Number(p.amount) })}>{t("invest.simulate")}</button>
                       <button className="icon-btn" aria-label={t("common.delete")} onClick={async () => { await api.deletePlan(p.id); load(); }}><Icon name="trash" size={16} /></button>
                     </span>} />
                 ))}
+                    </div>
+                    {components.some((p) => !p.next_execution) && <details>
+                      <summary>{t("plan.ended")}</summary>
+                      {components.filter((p) => !p.next_execution).map((p) => <Row key={p.id} title={p.name || p.symbol} detail={p.end ? t("invest.until", { date: fmt.date(p.end) }) : t("plan.ended")} onClick={() => openPlan(p, p)} />)}
+                    </details>}
+                  </section>;
+                })}
               </div>
             )}
           </Glass>
@@ -130,6 +155,18 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
         </motion.div>
       </div>
 
+      <Sheet open={!!viewing} onClose={() => setViewing(null)} title={viewing?.name || viewing?.symbol}>
+        {viewing && <div className="stack">
+          <p>{viewing.symbol} · {(viewing.quantity === null ? "—" : fmt.number(Number(viewing.quantity), 6))} {t("invest.units")}</p>
+          <p>{t("invest.value")}: {fmt.money(viewing.value, cur)}</p>
+          {viewing.valuation_source === "snapshot" && <p className="note">{t("invest.snapshotOnly")}</p>}
+          {viewing.as_of && <p className="muted">{t("invest.snapshotDate", { date: fmt.date(viewing.as_of) })}</p>}
+          {viewing.id === 0 ? <p className="note">{t("invest.fromPlan")}</p> : <button className="btn ghost danger" onClick={async () => {
+            if (!confirm(t("common.confirmDelete"))) return;
+            try { await api.deleteHolding(viewing.id); setViewing(null); load(); } catch (e) { notify(errorText(e)); }
+          }}>{t("common.delete")}</button>}
+        </div>}
+      </Sheet>
       <Sheet open={adding === "holding"} onClose={() => setAdding(null)} title={t("invest.add")}><AddHolding onDone={() => { setAdding(null); load(); }} /></Sheet>
       <Sheet open={grouping} onClose={() => setGrouping(false)} title={t("invest.newPlan")}>
         {grouping && <PlanGroup currency={cur} accounts={accounts} onDone={() => { setGrouping(false); load(); notify(t("invest.added")); }} />}

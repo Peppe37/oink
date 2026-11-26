@@ -211,3 +211,27 @@ def test_one_plan_of_three_securities_and_a_switch_to_an_unlisted_one(owner: Any
     assert listed[nvda]["end"] == "2026-11-30" and listed[nvda]["position"]["executions"] == 3
     spending = [t for t in owner.get("/api/transactions").json() if t["category"] != "investments"]
     assert spending == []  # all nine purchases are investments
+
+
+def test_next_payment_excludes_replaced_component_but_includes_the_new_one() -> None:
+    from oink.services.plans import next_execution
+
+    old = Plan(
+        symbol="OLD",
+        amount=Decimal(100),
+        start=date(2026, 11, 1),
+        end=date(2026, 11, 30),
+        day=16,
+        frequency="monthly",
+        active=True,
+    )
+    new = Plan(
+        symbol="NEW",
+        amount=Decimal(100),
+        start=date(2026, 12, 1),
+        day=16,
+        frequency="monthly",
+        active=True,
+    )
+    assert next_execution(old, date(2026, 11, 26)) is None
+    assert next_execution(new, date(2026, 11, 26)) == date(2026, 12, 16)

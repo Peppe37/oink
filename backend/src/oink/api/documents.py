@@ -17,6 +17,8 @@ from oink.api.deps import Caller, get_db, require
 from oink.core.db import Document
 from oink.services import documents as docs
 from oink.services.ai import AI
+from oink.services.portfolio_snapshots import Snapshot
+from oink.services.portfolio_snapshots import apply as apply_snapshot
 
 router = APIRouter(prefix="/api/documents")
 _TASKS: dict[int, asyncio.Task[None]] = {}  # documents being read in the background
@@ -390,3 +392,20 @@ def dismiss_review(
     doc.review = {**(doc.review or {}), "dismissed": True}
     db.commit()
     return docs.to_dict(doc)
+
+
+@router.post("/{doc_id}/positions")
+def apply_positions(
+    doc_id: int,
+    body: Snapshot,
+    who: Caller = Depends(require("documents:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if not who.browser and "accounts:write" not in who.scopes:
+        raise HTTPException(403, "scope_missing:accounts:write")
+    doc = _mine(db, who, doc_id)
+    try:
+        ids = apply_snapshot(db, who.user, doc, body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"holdings": ids, "document": docs.to_dict(doc)}

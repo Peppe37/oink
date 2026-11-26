@@ -579,3 +579,25 @@ def test_a_past_month_report_sees_nothing_after_it(owner: TestClient) -> None:
     months = owner.get("/api/reports/months").json()
     assert [m["month"] for m in months] == ["2026-11", "2026-10", "2026-09"]
     assert not any(m["report"] for m in months)
+
+
+def test_overview_separates_account_balances_from_partial_investments(owner: TestClient) -> None:
+    owner.post("/api/accounts", json={"name": "Bank", "balance": "100"})
+    owner.post("/api/accounts", json={"name": "Unknown bank"})
+    owner.post(
+        "/api/holdings",
+        json={"symbol": "CUSTOM:EUR", "quantity": "1", "currency": "EUR", "manual_price": "20"},
+    )
+    owner.post(
+        "/api/holdings",
+        json={"symbol": "CUSTOM:USD", "quantity": "1", "currency": "USD", "manual_price": "30"},
+    )
+    data = owner.get("/api/reports/overview").json()
+    worth = data["net_worth"]
+    assert worth["accounts_total"] == 100
+    assert worth["investments"] == 20 and worth["total"] == 120
+    assert data["balance"][-1]["value"] == worth["accounts_total"]
+    assert worth["unvalued_accounts"] == ["Unknown bank"]
+    assert worth["unvalued_investments"] == ["CUSTOM:USD"]
+    assert worth["missing_rates"] == ["USD"]
+    assert not worth["complete"]

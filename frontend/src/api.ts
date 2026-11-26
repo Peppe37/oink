@@ -19,7 +19,7 @@ export type MonthSummary = {
 };
 export type Overview = {
   currency: string;
-  net_worth: { currency: string; total: number; investments?: number; accounts: { id: number; name: string; kind: string; value: number | null }[]; missing_rates: string[] };
+  net_worth: { currency: string; total: number; accounts_total: number; complete: boolean; unvalued_accounts: string[]; unvalued_investments: string[]; investments?: number; accounts: { id: number; name: string; kind: string; value: number | null }[]; missing_rates: string[] };
   month: { currency: string; current: MonthSummary; usual_spending: number | null; usual_income: number | null;
            categories: Record<string, { now: number; usual: number; delta: number }> };
   series: { month: string; income: number; spending: number }[];
@@ -41,12 +41,12 @@ export type UpdateInfo = {
   state: { state?: string; version?: string };
 };
 export type SystemInfo = { version: string; updates?: UpdateInfo; ai_model?: string; banking?: boolean; callback_url?: string; inbox?: string; mcp_url?: string; api_docs?: string; sso?: boolean };
-export type HoldingItem = { id: number; symbol: string; name: string; kind: string; quantity: string; price: string | null; currency: string; value: number | null; cost: number | null; gain: number | null; stale: boolean };
-export type Holdings = { currency: string; total: number; cost: number; gain: number | null; by_kind: Record<string, number>; items: HoldingItem[] };
+export type HoldingItem = { id: number; as_of?: string | null; valuation_source?: "market" | "snapshot"; document_id?: number | null; account_id?: number | null; symbol: string; name: string; kind: string; quantity: string | null; price: string | null; currency: string; value: number | null; cost: number | null; gain: number | null; stale: boolean };
+export type Holdings = { unassigned_debits: { count: number; total: number }; currency: string; total: number; cost: number; gain: number | null; by_kind: Record<string, number>; items: HoldingItem[] };
 export type PlanItem = {
   id: number; symbol: string; name: string; amount: string; currency: string; frequency: string; start: string; active: boolean;
-  account_id?: number | null; day?: number | null; end?: string | null;
-  position?: { executions: number; invested: string; units: string | null; last: string | null } | null;
+  account_id?: number | null; day?: number | null; end?: string | null; next_execution?: string | null;
+  position?: { units_estimated?: boolean; first?: string | null; executions: number; invested: string; units: string | null; last: string | null } | null;
 };
 export type PlanProposal = {
   kind: "ready" | "pick"; isin?: string; symbol?: string; name?: string; amount: string; currency: string; day: number;
@@ -83,6 +83,8 @@ export type Doc = {
 };
 export type DocCheck = { name: string; ok: boolean | null; detail: Record<string, string> };
 export type DocReview = {
+  positions?: { as_of: string | null; positions: { symbol: string | null; name: string | null; quantity: string | null; market_value?: string | null; kind?: string | null; currency: string | null; cost: string | null }[] };
+  positions_applied?: { as_of: string; holdings: number[] };
   checks?: DocCheck[]; movements: number; account_warning?: { code: string; found?: string; suggested?: number | null } | null; engine?: boolean; confirmed?: boolean; dismissed?: boolean; error?: string;
   ai?: { explanation?: string; suggestions?: string[]; confidence?: string };
   layout?: { bank: string; skipped: string[]; trades: { day: string; isin: string; name: string; quantity: string; amount: string }[]; savings: number };
@@ -157,6 +159,7 @@ export const api = {
   stopDocument: (id: number) => call<Doc>(`/documents/${id}/stop`, { method: "POST" }),
   dismissDocument: (id: number) => call<Doc>(`/documents/${id}/dismiss`, { method: "POST" }),
   documents: (params: { kind?: string; q?: string; status?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
+  applyPositions: (id: number, data: { as_of: string; account_id: number; positions: { symbol: string; name: string; kind: string; quantity: string | null; market_value: string | null; currency: string; cost: string | null }[] }) => call<{ holdings: number[]; document: Doc }>(`/documents/${id}/positions`, { method: "POST", body: json(data) }),
   document: (id: number) => call<Doc>(`/documents/${id}`),
   uploadDocument: (file: File, opts: { kind?: string; accountId?: number } = {}) => {
     const form = new FormData();

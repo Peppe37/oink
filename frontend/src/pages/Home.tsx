@@ -42,7 +42,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   const usual = data.month.usual_spending;
   const delta = usual !== null ? month.spending - usual : null;
   const first = data.balance[0]?.value ?? 0;
-  const trend = data.net_worth.total - first;
+  const accountsTotal = data.net_worth.accounts_total;
+  const trend = accountsTotal - first;
   const categories = Object.entries(month.by_category) as [string, number][];
   const movers = Object.entries(data.month.categories).filter(([, c]) => Math.abs(c.delta) >= 10).slice(0, 4);
   const empty = data.net_worth.accounts.length === 0;
@@ -107,14 +108,17 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
         <div className="grid">
           <motion.div variants={rise} className="span-7">
             <Glass refract strength={42} className="card hero">
-              <h3>{t("home.netWorth")}</h3>
-              <div className="big"><Money value={data.net_worth.total} currency={cur} /></div>
+              <h3>{t("home.accountsBalance")}</h3>
+              <div className="big"><Money value={accountsTotal} currency={cur} /></div>
+              <p className="muted small-text"><Link to="/invest">{t("home.investmentsSeparate", { amount: fmt.money(data.net_worth.investments ?? 0, cur) })}</Link></p>
+              {data.net_worth.unvalued_accounts.length > 0 && <p className="note">{t("home.unknownBalances", { names: data.net_worth.unvalued_accounts.join(", ") })}</p>}
+              {data.net_worth.unvalued_investments.length > 0 && <p className="note">{t("home.unknownInvestments", { names: data.net_worth.unvalued_investments.join(", ") })}</p>}
               <div className={`num trend ${trend >= 0 ? "up" : "down"}`}>
                 <Icon name={trend >= 0 ? "arrowUp" : "arrowDown"} size={16} stroke={2.2} />
                 {t("home.trend", { amount: fmt.money(Math.abs(trend), cur) })}
               </div>
               {data.net_worth.missing_rates.length > 0 && <p className="faint small-text">{t("home.missingRates", { codes: data.net_worth.missing_rates.join(", ") })}</p>}
-              <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1)} currency={cur} />
+              <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1)} currency={cur} label={t("home.accountsBalance")} />
             </Glass>
           </motion.div>
 

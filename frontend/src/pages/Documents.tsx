@@ -264,8 +264,10 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
         <div className="row wrap" style={{ gap: 8 }}>
           <a className="btn ghost small" href={api.documentUrl(doc.id)} target="_blank" rel="noreferrer"><Icon name="open" size={16} /> {t("docs.open")}</a>
           <a className="btn ghost small" href={api.documentUrl(doc.id, true)}><Icon name="download" size={16} /> {t("docs.download")}</a>
+          {doc.kind === "investment" && doc.status !== "processing" && <button className="btn ghost small" onClick={async () => { try { onChanged(await api.reprocessDocument(doc.id)); } catch (e) { notify(errorText(e)); } }}>{t("docs.reprocess")}</button>}
           <button className="btn ghost small danger" onClick={remove}><Icon name="trash" size={16} /> {t("docs.delete")}</button>
         </div>
+        {doc.kind === "investment" && doc.status !== "processing" && <PositionSnapshot key={doc.id} doc={doc} accounts={accounts} onChanged={onChanged} notify={notify} />}
         {doc.review.account_warning && <AccountWarning doc={doc} accounts={accounts} notify={notify} onChanged={onChanged} />}
         {doc.status === "review" && <ReviewCard doc={doc} accounts={accounts} target={target} notify={notify} onChanged={onChanged} />}
         {doc.status === "processing" && (
@@ -445,4 +447,58 @@ function AccountWarning({ doc, accounts, notify, onChanged }: { doc: Doc; accoun
       </div>
     </div>
   );
+}
+
+function PositionSnapshot({ doc, accounts, onChanged, notify }: {
+  doc: Doc; accounts: Account[]; onChanged: (d: Doc) => void; notify: (s: string) => void;
+}) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [asOf, setAsOf] = useState(doc.review.positions?.as_of || doc.date || new Date().toISOString().slice(0, 10));
+  const [account, setAccount] = useState(doc.account_id ? String(doc.account_id) : "");
+  const [rows, setRows] = useState((doc.review.positions?.positions ?? []).map((p) => ({
+    symbol: p.symbol || "", name: p.name || "", kind: ["stock", "etf", "bond", "fund", "crypto"].includes(p.kind ?? "") ? p.kind! : "stock", quantity: p.quantity || "", market_value: p.market_value || "", currency: p.currency || "EUR", cost: p.cost || "",
+  })));
+  const [previous, setPrevious] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.holdings().then((h) => setPrevious(Object.fromEntries(h.items.map((p) => [p.symbol, p.quantity ?? "—"])))).catch(() => undefined); }, []);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true);
+    try {
+      const result = await api.applyPositions(doc.id, { as_of: asOf, account_id: Number(account), positions: rows.map((r) => ({
+        ...r, quantity: r.quantity ? r.quantity.replace(",", ".") : null, market_value: r.market_value ? r.market_value.replace(",", ".") : null, cost: r.cost ? r.cost.replace(",", ".") : null,
+      })) });
+      setPrevious(Object.fromEntries(rows.map((r) => [r.symbol, r.quantity.replace(",", ".")])));
+      onChanged(result.document); notify(t("docs.positionsSaved"));
+    } catch (e) { notify(errorText(e)); } finally { setBusy(false); }
+  };
+  return <form className="review-card stack" onSubmit={submit}>
+    <h4>{t("docs.positionsTitle")}</h4>
+    <p className="muted small-text" style={{ margin: 0 }}>{t("docs.positionsHint")}</p>
+    {doc.review.positions_applied && <p className="note">{t("docs.positionsApplied", { date: fmt.date(doc.review.positions_applied.as_of) })}</p>}
+    <div className="two">
+      <Field label={t("docs.date")}><input className="field" type="date" value={asOf} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setAsOf(e.target.value)} required /></Field>
+      <Field label={t("docs.account")}><select className="field" value={account} onChange={(e) => setAccount(e.target.value)} required><option value="">—</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field>
+    </div>
+    {rows.map((r, i) => <div key={i} className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+      <div className="two">
+        <Field label={t("invest.symbol")}><input className="field" value={r.symbol} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, symbol: e.target.value.toUpperCase() } : x))} required /></Field>
+        <Field label={t("accounts.name")}><input className="field" value={r.name} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} /></Field>
+      </div>
+      <div className="two">
+        <Field label={t("invest.quantity")} hint={t("docs.previousQuantity", { quantity: previous[r.symbol] ?? "—" })}><input className="field num" inputMode="decimal" value={r.quantity} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} required={!r.market_value} /></Field>
+        <Field label={t("accounts.currency")}><input className="field" value={r.currency} maxLength={10} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, currency: e.target.value.toUpperCase() } : x))} required /></Field>
+      </div>
+      <div className="two">
+        <Field label={`${t("docs.positionValue")} (${r.currency})`}><input className="field num" inputMode="decimal" value={r.market_value} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, market_value: e.target.value } : x))} required={!r.quantity} /></Field>
+        <Field label={t("docs.positionKind")}><select className="field" value={r.kind} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, kind: e.target.value } : x))}>{["stock", "etf", "bond", "fund", "crypto"].map((k) => <option key={k} value={k}>{t(`invest.kind.${k}` as never)}</option>)}</select></Field>
+      </div>
+      <Field label={`${t("invest.cost")} (${r.currency})`}><input className="field num" inputMode="decimal" value={r.cost} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, cost: e.target.value } : x))} /></Field>
+      <button type="button" className="btn ghost small" onClick={() => setRows(rows.filter((_, j) => j !== i))}>{t("common.delete")}</button>
+    </div>)}
+    <div className="row wrap" style={{ gap: 8 }}>
+      <button type="button" className="btn ghost small" onClick={() => setRows([...rows, { symbol: "", name: "", kind: "stock", quantity: "", market_value: "", currency: "EUR", cost: "" }])}>{t("invest.add")}</button>
+      <button className="btn" disabled={busy || !rows.length}>{busy ? <Spinner /> : t("docs.confirmPositions")}</button>
+    </div>
+  </form>;
 }

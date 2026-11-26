@@ -5,6 +5,7 @@ explains and suggests from these facts."""
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections import defaultdict
 from datetime import date, timedelta
@@ -57,11 +58,14 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
     positions = await plan_positions(db, book.user)
     by_symbol = {h.symbol.upper(): h for h in rows}
     from_plans: dict[str, tuple[Decimal, Decimal, str, str]] = {}
+    unknown_units: set[str] = set()
     for plan in db.scalars(select(Plan).where(Plan.user_id == book.user.id)):
         pos = positions.get(plan.id, {})
         if not pos.get("executions"):
             continue
         held = by_symbol.get(plan.symbol.upper())
+        if pos.get("units") is None and held is None:
+            unknown_units.add(plan.symbol.upper())
         units = extra_units(db, plan, held, pos)
         old = from_plans.get(
             plan.symbol.upper(), (Decimal(0), Decimal(0), plan.name, plan.currency)
@@ -77,6 +81,15 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
     synthetic = [
         Holding(
             id=0,
+            account_id=next(
+                (
+                    p.account_id
+                    for p in db.scalars(
+                        select(Plan).where(Plan.user_id == book.user.id, Plan.symbol == sym)
+                    )
+                ),
+                None,
+            ),
             user_id=book.user.id,
             symbol=sym,
             name=name,
@@ -89,11 +102,27 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
         if sym not in by_symbol
     ]
     extra = {sym: units for sym, (units, *_rest) in from_plans.items() if sym in by_symbol}
-    for h in [*rows, *synthetic]:
-        quantity = h.quantity + extra.get(h.symbol.upper(), Decimal(0)) if h.id else h.quantity
+    all_holdings = [*rows, *synthetic]
+    if refresh:
+        from oink.services import fx
+
+        for h in all_holdings:
+            if (
+                h.manual_price is None
+                and not h.symbol.upper().startswith("CUSTOM:")
+                and (h.quantity_known is not False or extra.get(h.symbol.upper(), Decimal(0)) > 0)
+            ):
+                with contextlib.suppress(MarketError):
+                    await quote(db, h.symbol)
+        await fx.ensure(db, fx.currencies_in_use(db))
+        book.rates = fx.Rates.load(db)
+    for h in all_holdings:
+        added_units = extra.get(h.symbol.upper(), Decimal(0)) if h.id else Decimal(0)
+        quantity = h.quantity + added_units if h.id else h.quantity
+        snapshot_only = h.quantity_known is False and h.snapshot_value is not None
         price, currency, stale = h.manual_price, h.currency, False
         custom = h.symbol.upper().startswith("CUSTOM:")  # not listed (e.g. a private company)
-        if price is None and not custom:
+        if price is None and not custom and (not snapshot_only or added_units > 0):
             try:
                 q = await quote(db, h.symbol) if refresh else db.get(Quote, h.symbol.upper())
                 if q is not None:
@@ -101,10 +130,28 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
             except MarketError:
                 cached = db.get(Quote, h.symbol.upper())
                 price, stale = (cached.price, True) if cached else (None, True)
-        value_native = float(price * quantity) if price is not None else None
+        value_native = (
+            float(price * quantity)
+            if price is not None and h.symbol.upper() not in unknown_units
+            else None
+        )
         if value_native is None and custom and h.cost is not None:
             value_native = float(h.cost)  # no market price: worth what was paid in
         value = to_base(book, value_native, currency) if value_native is not None else None
+        if snapshot_only and h.snapshot_value is not None:
+            reported_value = to_base(book, h.snapshot_value, h.currency)
+            extra_value = (
+                to_base(book, price * added_units, currency)
+                if added_units > 0 and price is not None
+                else 0.0
+                if added_units == 0
+                else None
+            )
+            value = (
+                reported_value + extra_value
+                if reported_value is not None and extra_value is not None
+                else None
+            )
         cost = to_base(book, h.cost, h.currency) if h.cost is not None else None
         if value is not None:
             total += value
@@ -112,10 +159,16 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
         items.append(
             {
                 "id": h.id,
+                "as_of": h.as_of.isoformat() if h.as_of else None,
+                "valuation_source": "snapshot" if snapshot_only else "market",
+                "document_id": h.document_id,
+                "account_id": h.account_id,
                 "symbol": h.symbol,
                 "name": h.name,
                 "kind": h.kind,
-                "quantity": str(round(quantity, 6)),
+                "quantity": str(round(quantity, 6))
+                if h.symbol.upper() not in unknown_units and h.quantity_known is not False
+                else None,
                 "from_plan": not h.id or h.symbol.upper() in extra,
                 "price": str(price) if price is not None else None,
                 "currency": currency,
@@ -129,7 +182,14 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
     for i in items:
         if isinstance(i["value"], float):
             by_kind[str(i["kind"])] += i["value"]
+    from oink.services.plans import unassigned_debits
+
+    unidentified = unassigned_debits(db, book.user)
     return {
+        "unassigned_debits": {
+            "count": len(unidentified),
+            "total": round(sum(-(book.value(t.amount, t.currency) or 0) for t in unidentified), 2),
+        },
         "currency": book.base,
         "total": round(total, 2),
         "cost": round(cost_total, 2),
@@ -221,7 +281,11 @@ async def picture(db: Session, book: Book) -> dict[str, Any]:
         db.scalars(select(Plan).where(Plan.user_id == book.user.id, Plan.active.is_(True)))
     )
     plan_monthly = 0.0
+    from oink.services.plans import next_execution
+
     for p in plans:
+        if next_execution(p) is None:
+            continue
         v = to_base(book, float(p.amount) * PER_MONTH.get(p.frequency, 1.0), p.currency)
         plan_monthly += v or 0.0
     spending = life.get("spending") or fixed["monthly"] or 0

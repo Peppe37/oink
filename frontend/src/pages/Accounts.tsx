@@ -18,7 +18,7 @@ export function Accounts({ notify, adding, setAdding, baseCurrency }: { notify: 
   const [archived, setArchived] = useState<Account[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [requests, setRequests] = useState<StatementRequest[]>([]);
-  const [total, setTotal] = useState<{ total: number; currency: string } | null>(null);
+  const [total, setTotal] = useState<{ total: number; currency: string; partial: boolean } | null>(null);
   const [open, setOpen] = useState<Account | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [params, setParams] = useSearchParams();
@@ -31,7 +31,7 @@ export function Accounts({ notify, adding, setAdding, baseCurrency }: { notify: 
     setArchived(arch.filter((a) => a.archived));
     setConnections(conns);
     setRequests(reqs);
-    setTotal({ total: overview.net_worth.total, currency: overview.currency });
+    setTotal({ total: overview.net_worth.accounts_total, currency: overview.currency, partial: overview.net_worth.accounts.some((a) => a.value === null) });
   }, []);
   useEffect(() => { load().catch((e) => notify(errorText(e))); }, [load, notify, errorText]);
   useEffect(() => {
@@ -64,7 +64,7 @@ export function Accounts({ notify, adding, setAdding, baseCurrency }: { notify: 
   return (
     <motion.div className="page" variants={stagger} initial="hidden" animate="show">
       <PageHeader title={t("accounts.title")}
-        subtitle={total ? <span className="num">{t("accounts.total")} {fmt.money(total.total, total.currency || baseCurrency)}</span> : undefined}
+        subtitle={total ? <span className="num">{t(total.partial ? "accounts.partialTotal" : "accounts.total")} {fmt.money(total.total, total.currency || baseCurrency)}</span> : undefined}
         action={
           <div className="row" style={{ gap: 8 }}>
             {connections.length > 0 && <button className="icon-btn glassy" onClick={sync} disabled={syncing} aria-label={t("accounts.syncNow")} title={t("accounts.syncNow")}>{syncing ? <Spinner /> : <Icon name="sync" />}</button>}

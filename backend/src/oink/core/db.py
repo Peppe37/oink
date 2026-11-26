@@ -312,6 +312,11 @@ class Holding(Base):
     quantity: Mapped[Decimal] = mapped_column(DecimalText(), default=Decimal(0))
     cost: Mapped[Decimal | None] = mapped_column(DecimalText(), nullable=True)  # total paid
     manual_price: Mapped[Decimal | None] = mapped_column(DecimalText(), nullable=True)
+    as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity_known: Mapped[bool] = mapped_column(Boolean, default=True)
+    snapshot_value: Mapped[Decimal | None] = mapped_column(DecimalText(), nullable=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

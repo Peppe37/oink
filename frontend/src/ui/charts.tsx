@@ -18,7 +18,7 @@ function smooth(points: [number, number][]): string {
   return d;
 }
 
-export function AreaChart({ data, currency, height = 170 }: { data: { day: string; value: number }[]; currency: string; height?: number }) {
+export function AreaChart({ data, currency, height = 170, label }: { data: { day: string; value: number }[]; currency: string; height?: number; label?: string }) {
   const { t, fmt } = useI18n();
   const width = 600;
   const [hover, setHover] = useState<number | null>(null);
@@ -45,7 +45,7 @@ export function AreaChart({ data, currency, height = 170 }: { data: { day: strin
           const box = e.currentTarget.getBoundingClientRect();
           setHover(Math.max(0, Math.min(data.length - 1, Math.round(((e.clientX - box.left) / box.width) * (data.length - 1)))));
         }}
-        onPointerLeave={() => setHover(null)} role="img" aria-label={t("home.netWorth")}>
+        onPointerLeave={() => setHover(null)} role="img" aria-label={label ?? t("home.netWorth")}>
         <defs>
           <linearGradient id="area-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stopColor="var(--pink)" stopOpacity="0.45" />

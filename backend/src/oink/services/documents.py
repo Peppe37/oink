@@ -758,6 +758,15 @@ async def process(
     if layout is not None and layout.bank:
         review["layout"] = {"bank": layout.bank, "skipped": layout.skipped,
                             "trades": layout.trades, "savings": len(layout.savings)}  # fmt: skip
+    if doc.kind == "investment" and body.strip() and ai.can_read_text:
+        from oink.services.portfolio_snapshots import propose
+
+        try:
+            positions = await propose(body, ai)
+            if positions:
+                review["positions"] = positions
+        except AIError as exc:
+            log.info("portfolio proposal failed: %s", exc)
     doc.review = review
     doc.status = "review" if verdict is not None and verdict.status == "review" else "ready"
     if doc.kind == "statement" and rows and wanted.get("import", True) and doc.status == "ready":

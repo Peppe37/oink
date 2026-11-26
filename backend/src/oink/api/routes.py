@@ -968,6 +968,20 @@ async def overview(
     book = rep.Book.of(db, who.user)
     invest = await holdings_value(db, book, refresh=False)
     worth = rep.net_worth(book)
+    worth["accounts_total"] = worth["total"]
+    worth["unvalued_accounts"] = [a["name"] for a in worth["accounts"] if a["value"] is None]
+    worth["unvalued_investments"] = [i["symbol"] for i in invest["items"] if i["value"] is None]
+    worth["missing_rates"] = sorted(
+        set(worth["missing_rates"])
+        | {
+            i["currency"]
+            for i in invest["items"]
+            if i["value"] is None
+            and i["price"] is not None
+            and book.rates.rate(i["currency"], book.base) is None
+        }
+    )
+    worth["complete"] = not (worth["unvalued_accounts"] or worth["unvalued_investments"])
     worth["investments"] = invest["total"]
     worth["total"] = round(worth["total"] + invest["total"], 2)
     return {

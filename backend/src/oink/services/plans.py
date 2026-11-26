@@ -23,8 +23,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oink.core.db import Account, FixedCost, Holding, Plan, Transaction, User
+from oink.core.db import Account, FixedCost, Holding, Plan, Quote, Transaction, User
 from oink.core.money import MoneyError, from_minor, to_minor
+from oink.services.fx import Rates
 from oink.services.ledger import INTERNAL
 from oink.services.markets import MarketError, close_on, daily_closes
 
@@ -55,6 +56,15 @@ def expected_days(plan: Plan, until: date) -> list[date]:
         month += months
         year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
     return out
+
+
+def next_execution(plan: Plan, today: date | None = None) -> date | None:
+    """The next scheduled component payment, respecting a replacement's end date."""
+    today = today or date.today()
+    if not plan.active:
+        return None
+    until = max(today, plan.start) + timedelta(days=370)
+    return next((d for d in expected_days(plan, until) if d >= today), None)
 
 
 def match_executions(db: Session, user: User, today: date | None = None) -> int:
@@ -127,22 +137,51 @@ async def plan_positions(db: Session, user: User) -> dict[int, dict[str, Any]]:
         )
         invested = sum((-from_minor(t.amount, t.currency) for t in txs), Decimal(0))
         units: Decimal | None = Decimal(0)
+        reported = {
+            t.id: re.search(
+                r"\b(?:quantity|quantità)\s*:?\s*(\d+(?:[.,]\d+)?)", t.description, re.I
+            )
+            for t in txs
+        }
+        cached_quote = db.get(Quote, plan.symbol.upper())
+        price_currency = (cached_quote.currency if cached_quote else "") or plan.currency
+        rates = Rates.load(db)
+        purchases: list[dict[str, str | None]] = []
         if txs:
             try:
                 closes = (
                     {}
-                    if plan.symbol.upper().startswith("CUSTOM:")
+                    if all(reported.values()) or plan.symbol.upper().startswith("CUSTOM:")
                     else await daily_closes(plan.symbol)
                 )
             except MarketError:
                 closes = {}
             for t in txs:
+                bought: Decimal | None
+                if (exact := reported[t.id]) is not None:
+                    bought = Decimal(exact[1].replace(",", "."))
+                    purchases.append({"day": t.day.isoformat(), "units": str(bought)})
+                    if units is not None:
+                        units += bought
+                    continue
                 price = close_on(closes, t.day)
-                if price is None or price <= 0 or units is None:
+                paid = rates.convert(-t.amount, t.currency, price_currency)
+                bought = (
+                    from_minor(paid, price_currency) / price
+                    if paid is not None and price and price > 0
+                    else None
+                )
+                purchases.append(
+                    {"day": t.day.isoformat(), "units": str(bought) if bought is not None else None}
+                )
+                if bought is None or units is None:
                     units = None
                     continue
-                units += -from_minor(t.amount, t.currency) / price
+                units += bought
         out[plan.id] = {
+            "purchases": purchases,
+            "units_estimated": any(v is None for v in reported.values()),
+            "first": txs[0].day.isoformat() if txs else None,
             "executions": len(txs),
             "invested": str(invested),
             "units": str(round(units, 6)) if units is not None and txs else None,
@@ -156,11 +195,20 @@ def extra_units(
     db: Session, plan: Plan, holding: Holding | None, positions: dict[str, Any]
 ) -> Decimal:
     """Units the plan added on top of a holding typed in by hand (bought after it was)."""
+    if holding is None:
+        return Decimal(positions["units"]) if positions.get("units") is not None else Decimal(0)
+    since = holding.as_of or (holding.created.date() if holding.created else date.min)
+    if "purchases" in positions:
+        return sum(
+            (
+                Decimal(p["units"])
+                for p in positions["purchases"]
+                if p["units"] is not None and date.fromisoformat(p["day"]) > since
+            ),
+            Decimal(0),
+        )
     if positions.get("units") is None:
         return Decimal(0)
-    if holding is None:
-        return Decimal(positions["units"])
-    since = holding.created.date() if holding.created else date.min
     share = [d for d in positions["days"] if date.fromisoformat(d) > since]
     if not positions["days"]:
         return Decimal(0)
@@ -205,6 +253,26 @@ def _looks_like_purchase(t: Transaction, account: Account | None) -> bool:
     return not already and (
         (broker and (blank or worded)) or (worded and bool(ISIN.search(text.upper())))
     )
+
+
+def unassigned_debits(db: Session, user: User) -> list[Transaction]:
+    """Broker debits lacking a security identity: visible gaps, never guessed positions."""
+    accounts = {a.id: a for a in db.scalars(select(Account).where(Account.user_id == user.id))}
+    return [
+        t
+        for t in db.scalars(
+            select(Transaction).where(
+                Transaction.user_id == user.id,
+                Transaction.amount < 0,
+                Transaction.plan_id.is_(None),
+                Transaction.parent_id.is_(None),
+                Transaction.category.in_(("", "other", "investments")),
+                Transaction.category_by != "split",
+                Transaction.transfer_id.is_(None),
+            )
+        )
+        if t.source != "pending" and _looks_like_purchase(t, accounts.get(t.account_id))
+    ]
 
 
 def suggestions(db: Session, user: User, today: date | None = None) -> list[dict[str, Any]]:

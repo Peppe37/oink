@@ -21,6 +21,7 @@ from oink.services.markets import MarketError, history, quote, search
 from oink.services.plans import (
     link_purchase,
     match_executions,
+    next_execution,
     plan_positions,
     proposals,
     suggestions,
@@ -191,7 +192,9 @@ class PlanIn(BaseModel):
 
 
 def _plan_out(p: Plan, positions: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
-    return {"id": p.id, "symbol": p.symbol, "name": p.name, "amount": str(p.amount),
+    upcoming = next_execution(p)
+    return {"next_execution": upcoming.isoformat() if upcoming else None,
+            "id": p.id, "symbol": p.symbol, "name": p.name, "amount": str(p.amount),
             "currency": p.currency, "frequency": p.frequency, "start": p.start.isoformat(),
             "active": p.active, "account_id": p.account_id, "day": p.day,
             "end": p.end.isoformat() if p.end else None,

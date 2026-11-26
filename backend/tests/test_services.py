@@ -118,7 +118,7 @@ def test_rates_convert_through_eur() -> None:
 async def test_refresh_reads_ecb_and_coingecko(db: Database) -> None:
     def answer(request: httpx.Request) -> httpx.Response:
         if "frankfurter" in str(request.url):
-            return httpx.Response(200, json={"rates": {"USD": 1.25}})
+            return httpx.Response(200, json=[{"base": "EUR", "quote": "USD", "rate": 1.25}])
         return httpx.Response(200, json={"bitcoin": {"eur": 61000.5}})
 
     with db.sessions() as s:
@@ -269,3 +269,48 @@ async def test_update_status_and_request(tmp_path: Path, monkeypatch: pytest.Mon
     updates.request_update(settings.updater_dir, "0.3.1")
     assert json.loads((settings.updater_dir / "request.json").read_text())["version"] == "0.3.1"
     assert updates.parse("v0.10.0") > updates.parse("0.9.9")
+
+
+def test_fx_currencies_include_plan_quote_currencies(db: Database) -> None:
+    from oink.core.db import Holding, Plan, Quote
+    from oink.services.fx import currencies_in_use
+
+    uid, _ = _user_with_account(db)
+    with db.sessions() as s:
+        s.add(Holding(user_id=uid, symbol="MANUAL", currency="CHF", quantity=Decimal("1")))
+        s.add(
+            Plan(
+                user_id=uid,
+                symbol="AAPL",
+                currency="EUR",
+                amount=Decimal("100"),
+                start=date(2026, 11, 1),
+            )
+        )
+        s.add(Quote(symbol="AAPL", currency="USD", price=Decimal("100")))
+        s.add(Quote(symbol="UNRELATED", currency="JPY", price=Decimal("100")))
+        s.commit()
+        assert currencies_in_use(s) == {"EUR", "CHF", "USD"}
+
+
+async def test_yen_and_usd_reference_rates_preserve_minor_units_and_failures_keep_cache(
+    db: Database,
+) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["base"] == "EUR"
+        return httpx.Response(
+            200, json=[{"quote": "USD", "rate": 1.25}, {"quote": "JPY", "rate": 160}]
+        )
+
+    with db.sessions() as s:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            assert await refresh(s, {"USD", "JPY"}, client) == 2
+        rates = Rates.load(s)
+        assert rates.convert(100, "USD", "EUR") == 80
+        assert rates.convert(160, "JPY", "EUR") == 100
+        assert rates.convert(100, "EUR", "JPY") == 160
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(503))
+        ) as client:
+            assert await refresh(s, {"USD", "JPY"}, client) == 0
+        assert Rates.load(s).convert(100, "USD", "EUR") == 80
