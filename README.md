@@ -156,6 +156,30 @@ gross − deductions = net, taxable + VAT = total). What doesn't add up isn't im
 waits in **To review** with the difference, and the AI (if configured) adds a note on
 what is likely wrong. You decide: import anyway, fix, or dismiss.
 
+### Portfolio snapshots
+
+Upload a screenshot of open positions in **Documents**, open the investment document,
+and review **Reconcile positions**. Select the account and the snapshot date, check the
+security identifiers, and confirm either total quantities or the visible market values.
+The proposal does not change the portfolio until it is confirmed. Repeating a snapshot
+updates the same positions rather than creating another purchase. Unlisted positions are
+left unchanged; a newer snapshot cannot be overwritten by an older one.
+
+When quantities are visible, prices and foreign-currency conversions update automatically.
+When only market values are visible, Oink keeps those values with the snapshot date and
+leaves quantities unknown. A later screenshot can update them. It never derives share
+counts from rounded market values. Plan purchases before the snapshot are not added again.
+
+The home screen and Accounts show account balances separately from investments. Missing
+balances or valuations are shown explicitly. Components paid from the same broker account
+appear under one savings plan; ended components remain in its history. Upcoming contribution
+totals respect replacement dates.
+
+Fiat conversions use the latest available official reference rates through
+[Frankfurter](https://frankfurter.dev/), refreshed hourly and on demand when missing or stale.
+These are reference rates, not trading tick data. Market quotes have a 15-minute cache.
+An API client applying a position snapshot needs both `documents:write` and `accounts:write`.
+
 ## Single sign-on (Keycloak and friends)
 
 Create an OpenID Connect client (confidential or public with PKCE) with redirect URI
