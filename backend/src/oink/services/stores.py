@@ -13,6 +13,7 @@ Everything degrades: a store that is down is skipped (logged), never a failed up
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -39,10 +40,16 @@ class Engine:
             {"Authorization": f"Bearer {settings.engine_token}"} if settings.engine_token else {}
         )
         self._transport = transport
+        self.timeout = float(settings.engine_timeout)
 
     @property
     def enabled(self) -> bool:
         return bool(self.url)
+
+    async def cancel(self) -> None:
+        """Stop the reading in progress (the engine drops Docling and reloads it later)."""
+        with contextlib.suppress(StoreError):
+            await self._post("/cancel", 30)
 
     async def _post(self, path: str, timeout: float, **kwargs: Any) -> Any:
         async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
@@ -56,7 +63,9 @@ class Engine:
 
     async def extract(self, filename: str, raw: bytes) -> dict[str, Any]:
         """{"markdown", "text", "tables": [{"header", "rows", "page"}], "pages"}"""
-        data: dict[str, Any] = await self._post("/extract", 900, files={"file": (filename, raw)})
+        data: dict[str, Any] = await self._post(
+            "/extract", self.timeout, files={"file": (filename, raw)}
+        )
         return data
 
     async def embed(self, texts: list[str]) -> list[tuple[list[float], dict[str, list[Any]]]]:

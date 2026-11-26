@@ -543,7 +543,56 @@ def fixed_payments(
 
 
 class SnoozeIn(BaseModel):
-    days: int = Field(default=7, ge=1, le=90)
+    days: int = Field(default=1, ge=1, le=90)
+
+
+class PaidIn(BaseModel):
+    account_id: int
+    day: date | None = None
+    balance_updated: bool = False  # the account's balance already counts it
+
+
+def _cost(db: Session, who: Caller, cost_id: int) -> FixedCost:
+    f = db.get(FixedCost, cost_id)
+    if f is None or f.user_id != who.user_id:
+        raise HTTPException(404, "fixed_unknown")
+    return f
+
+
+@router.post("/fixed-costs/{cost_id}/skip")
+def skip_fixed(
+    cost_id: int, who: Caller = Depends(require("accounts:write")), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """«Not due this time»: nothing spent, the next payment is expected."""
+    try:
+        nxt = fixed_service.skip(db, _cost(db, who, cost_id))
+    except fixed_service.FixedError as exc:
+        raise HTTPException(422, exc.code) from exc
+    return {"next_due": nxt.isoformat()}
+
+
+@router.post("/fixed-costs/{cost_id}/paid")
+def paid_fixed(
+    cost_id: int, body: PaidIn, who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    """«Paid another way» (cash…): written on the account it came from."""
+    cost = _cost(db, who, cost_id)
+    account = db.get(Account, body.account_id)
+    if account is None or account.user_id != who.user_id:
+        raise HTTPException(404, "account_unknown")
+    try:
+        tx = fixed_service.paid_elsewhere(
+            db, who.user, cost, account, body.day or date.today(), body.balance_updated
+        )
+    except (fixed_service.FixedError, MoneyError) as exc:
+        raise HTTPException(
+            409 if getattr(exc, "code", "") == "duplicate" else 422, str(exc)
+        ) from exc
+    return {
+        "transaction_id": tx.id,
+        "next_due": cost.next_due.isoformat() if cost.next_due else None,
+    }
 
 
 @router.post("/fixed-costs/{cost_id}/wait")

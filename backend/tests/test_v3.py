@@ -123,20 +123,20 @@ def test_simulation_endpoint_with_cached_history(owner: TestClient) -> None:
     assert bad.status_code == 422
 
 
-def test_ai_settings_from_the_app(owner: TestClient, second: TestClient) -> None:
-    assert owner.get("/api/system/ai").json()["source"] == "off"
-    saved = owner.put(
+def test_ai_settings_from_the_app(admin: TestClient, second: TestClient) -> None:
+    assert admin.get("/api/system/ai").json()["source"] == "off"
+    saved = admin.put(
         "/api/system/ai", json={"model": "openai/gpt-5.4-mini", "api_key": "sk-test-123"}
     ).json()
     assert saved["source"] == "app" and saved["has_key"] and saved["model"] == "openai/gpt-5.4-mini"
-    assert owner.get("/api/auth/status").json()["ai"] is True
-    with owner.app.state.db.sessions() as s:  # type: ignore[attr-defined]
+    assert admin.get("/api/auth/status").json()["ai"] is True
+    with admin.app.state.db.sessions() as s:  # type: ignore[attr-defined]
         from oink.core.db import Setting
 
         assert "sk-test-123" not in s.get(Setting, "ai.api_key").value  # encrypted
-    assert owner.app.state.ai.config().api_key == "sk-test-123"  # type: ignore[attr-defined]
+    assert admin.app.state.ai.config().api_key == "sk-test-123"  # type: ignore[attr-defined]
     assert second.put("/api/system/ai", json={"model": "x/y-z"}).status_code == 403
-    assert owner.delete("/api/system/ai").json()["source"] == "off"
+    assert admin.delete("/api/system/ai").json()["source"] == "off"
 
 
 def test_mcp_tools_follow_token_scopes(owner: TestClient) -> None:

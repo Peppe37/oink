@@ -97,6 +97,11 @@ class User(Base):
     # single sign-on (OpenID Connect: Keycloak, Authentik, Google…): the provider's subject
     oidc_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     email: Mapped[str] = mapped_column(String(255), default="")
+    #: a password set by the admin (or the default one): changed at the next sign-in
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: wrong passwords in a row; at LOCK_AFTER the account waits until `locked_until`
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class Invite(Base):
@@ -373,6 +378,8 @@ class FixedCost(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     #: «wait»: a missing payment isn't flagged again until this day
     snoozed_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: what the person said about single payments: [{"due", "kind": skipped|paid, "tx"?}]
+    events: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

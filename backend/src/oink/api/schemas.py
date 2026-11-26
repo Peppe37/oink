@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from oink.core.db import Account, Transaction, User
 from oink.core.money import as_text
+from oink.core.security import locked
 
 AccountKind = Literal["checking", "savings", "card", "cash", "investment", "crypto"]
 Language = Literal["", "en", "it", "de", "fr", "es"]
@@ -30,18 +31,25 @@ class UserOut(Out):
     disabled: bool
     created: datetime
     sso: bool = False
+    must_change_password: bool = False
+    locked: bool = False
 
 
 class UserIn(BaseModel):
     username: str = Field(min_length=2, max_length=40)
     name: str = ""
-    is_admin: bool = False
 
 
 class UserPatch(BaseModel):
+    """What the admin may change of a person: never their money."""
+
     name: str | None = Field(default=None, max_length=80)
-    is_admin: bool | None = None
+    username: str | None = Field(default=None, min_length=2, max_length=40)
     disabled: bool | None = None
+
+
+class TempPassword(BaseModel):
+    password: str = Field(default="", max_length=200)  # empty = generated
 
 
 class ProfilePatch(BaseModel):
@@ -238,6 +246,10 @@ class Setup(Login):
     base_currency: str = "EUR"
 
 
+class Signup(Setup):
+    name: str = Field(default="", max_length=80)
+
+
 class InviteAccept(BaseModel):
     token: str
     password: str = Field(min_length=1, max_length=200)
@@ -256,4 +268,5 @@ class Ask(BaseModel):
 def user_out(u: User) -> UserOut:
     out = UserOut.model_validate(u)
     out.sso = bool(u.oidc_sub)
+    out.locked = locked(u)
     return out

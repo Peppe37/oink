@@ -6,7 +6,11 @@ few tens of MB and takes a few seconds to load a model again.
 
 - POST /extract   (multipart file)       → markdown, plain text, tables (rows of cells), pages
 - POST /embed     {"texts": [...]}       → BGE-M3 dense (1024) + sparse (lexical weights)
+- POST /cancel                           → stop the reading in progress (Docling is dropped)
 - GET  /health                           → which models are in memory
+
+A PDF that already carries its text (every statement a bank generates) is read without
+OCR: OCR on CPU costs minutes per page and is only for scans and photos.
 
 Auth: `Authorization: Bearer $ENGINE_TOKEN` (the engine is meant for the compose network)."""
 
@@ -24,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 IDLE_SECONDS = int(os.environ.get("ENGINE_IDLE_SECONDS", "300"))
@@ -74,7 +78,12 @@ class Lazy:
                 self.loads += 1
                 log.info("%s loaded in %.1fs", self.name, time.monotonic() - started)
             self._conn.send((op, payload))
-            ok, result = self._conn.recv()
+            try:
+                ok, result = self._conn.recv()
+            except (EOFError, OSError) as exc:  # the process was stopped (cancel)
+                self._proc = self._conn = None
+                _trim()
+                raise RuntimeError("cancelled") from exc
             self._last = time.monotonic()
         if not ok:
             raise RuntimeError(result)
@@ -92,6 +101,15 @@ class Lazy:
                 log.info("%s unloaded after %ss idle", self.name, IDLE_SECONDS)
                 return True
         return False
+
+    def kill(self) -> bool:
+        """Stop the process now, even mid-request (the request fails with «cancelled»)."""
+        proc = self._proc
+        if proc is None or not proc.is_alive():
+            return False
+        proc.kill()
+        log.info("%s stopped on request", self.name)
+        return True
 
     @property
     def loaded(self) -> bool:
@@ -120,7 +138,7 @@ def _load_embedder() -> Any:
     return BGEM3FlagModel("BAAI/bge-m3", use_fp16=False, devices="cpu")
 
 
-def _load_converter() -> Any:
+def _converter(ocr: bool) -> Any:
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (
         AcceleratorOptions,
@@ -130,8 +148,9 @@ def _load_converter() -> Any:
     from docling.document_converter import DocumentConverter, ImageFormatOption, PdfFormatOption
 
     options = PdfPipelineOptions()
-    options.do_ocr = OCR
-    options.ocr_options = EasyOcrOptions(lang=OCR_LANGS)
+    options.do_ocr = ocr
+    if ocr:
+        options.ocr_options = EasyOcrOptions(lang=OCR_LANGS)
     options.do_table_structure = True
     options.table_structure_options.do_cell_matching = True
     options.accelerator_options = AcceleratorOptions(num_threads=THREADS, device="cpu")
@@ -141,6 +160,29 @@ def _load_converter() -> Any:
             InputFormat.IMAGE: ImageFormatOption(pipeline_options=options),
         }
     )
+
+
+def _load_converter() -> Any:
+    """Two pipelines, models loaded on first use: with OCR (scans, photos), without."""
+    return {"ocr": _converter(OCR), "text": _converter(False)}
+
+
+def has_text_layer(path: str) -> bool:
+    """Every page carries real text (a generated PDF, not a scan)."""
+    try:
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(path)
+        try:
+            for page in pdf:
+                text = page.get_textpage().get_text_range()
+                if len(text.strip()) < 30:
+                    return False
+            return len(pdf) > 0
+        finally:
+            pdf.close()
+    except Exception:  # unreadable here: let Docling (with OCR) try
+        return False
 
 
 embedder = Lazy("bge-m3", _load_embedder)
@@ -193,8 +235,12 @@ async def embed(body: EmbedIn) -> dict[str, Any]:
         return await asyncio.to_thread(embedder.call, "embed", body.texts)
 
 
-def _extract_with(converter_: Any, path: str) -> dict[str, Any]:
-    doc = converter_.convert(path).document
+def _extract_with(converters: Any, path: str) -> dict[str, Any]:
+    text = path.endswith(".pdf") and has_text_layer(path)
+    started = time.monotonic()
+    doc = converters["text" if text else "ocr"].convert(path).document
+    log.info("read %s pages in %.0fs (%s)", len(getattr(doc, "pages", {}) or {}),
+             time.monotonic() - started, "text layer" if text else "ocr")  # fmt: skip
     tables = []
     for table in doc.tables:
         try:
@@ -213,14 +259,21 @@ def _extract_with(converter_: Any, path: str) -> dict[str, Any]:
     }
 
 
+@app.post("/cancel", dependencies=[Depends(auth)])
+def cancel() -> dict[str, bool]:
+    return {"stopped": converter.kill()}
+
+
 @app.post("/extract", dependencies=[Depends(auth)])
-async def extract(file: UploadFile = File(...)) -> dict[str, Any]:
+async def extract(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
     suffix = Path(file.filename or "document.pdf").suffix.lower() or ".pdf"
     raw = await file.read()
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"document{suffix}"
         path.write_bytes(raw)
         async with work:
+            if await request.is_disconnected():  # stopped while waiting its turn
+                raise HTTPException(499, "cancelled")
             try:
                 return await asyncio.to_thread(converter.call, "extract", str(path))
             except Exception as exc:  # docling raises many kinds

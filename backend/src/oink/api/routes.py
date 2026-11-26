@@ -41,6 +41,8 @@ from oink.api.schemas import (
     ReportOut,
     RequestOut,
     Setup,
+    Signup,
+    TempPassword,
     TokenIn,
     TokenOut,
     TransactionIn,
@@ -52,7 +54,16 @@ from oink.api.schemas import (
     user_out,
 )
 from oink.core.config import Settings
-from oink.core.db import Account, ApiToken, Connection, Report, StatementRequest, Transaction, User
+from oink.core.db import (
+    Account,
+    ApiToken,
+    Connection,
+    Report,
+    Setting,
+    StatementRequest,
+    Transaction,
+    User,
+)
 from oink.core.money import CRYPTO, FIAT, MoneyError, as_text, normalise_code, to_minor
 from oink.core.security import (
     COOKIE,
@@ -60,6 +71,7 @@ from oink.core.security import (
     AuthError,
     Vault,
     authenticate,
+    clean_username,
     create_invite,
     create_token,
     create_user,
@@ -68,6 +80,8 @@ from oink.core.security import (
     new_session,
     session_user,
     set_password,
+    temporary_password,
+    unlock,
     user_count,
     verify_password,
 )
@@ -149,7 +163,14 @@ def auth_status(request: Request, db: Session = Depends(get_db)) -> dict[str, An
         "version": updates.current_version(),
         "sso": s.oidc_name if request.app.state.oidc.enabled else None,
         "password_login": s.password_login or not request.app.state.oidc.enabled,
+        "signup": signup_open(db, s),
     }
+
+
+def signup_open(db: Session, s: Settings) -> bool:
+    """People may create their own account: OINK_SIGNUP, unless the admin changed it."""
+    row = db.get(Setting, "signup")
+    return (row.value == "on") if row is not None else s.signup
 
 
 def _login(response: Response, db: Session, user: User, settings: Settings) -> None:
@@ -194,10 +215,33 @@ def login(
     s = settings_of(request)
     if not s.password_login and request.app.state.oidc.enabled:
         raise HTTPException(403, "sso_only")
-    user = authenticate(db, body.username, body.password)
+    try:
+        user = authenticate(db, body.username, body.password)
+    except AuthError as exc:
+        raise fail(423, exc) from exc
     if user is None:
         raise HTTPException(401, "wrong_credentials")
     _login(response, db, user, settings_of(request))
+    return {"ok": True}
+
+
+@api.post("/auth/signup")
+def signup(
+    body: Signup, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """Anyone who reaches the app creates their own account (when the admin allows it)."""
+    s = settings_of(request)
+    if not signup_open(db, s) or (not s.password_login and request.app.state.oidc.enabled):
+        raise HTTPException(403, "signup_closed")
+    try:
+        currency = normalise_code(body.base_currency or s.currency)
+        user = create_user(
+            db, body.username, body.password, name=body.name, language=body.language,
+            base_currency=currency,
+        )  # fmt: skip
+    except (AuthError, MoneyError) as exc:
+        raise fail(422, exc) from exc
+    _login(response, db, user, s)
     return {"ok": True}
 
 
@@ -292,7 +336,6 @@ def add_user(body: UserIn, request: Request, db: Session = Depends(get_db)) -> d
             db,
             body.username,
             None,
-            admin=body.is_admin,
             name=body.name,
             base_currency=settings_of(request).currency,
         )
@@ -321,12 +364,68 @@ def update_user(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(404, "user_unknown")
-    if user.id == who.user_id and (body.is_admin is False or body.disabled):
+    if user.id == who.user_id and body.disabled:
         raise HTTPException(422, "cannot_demote_self")
-    for key, value in body.model_dump(exclude_unset=True).items():
-        setattr(user, key, value)
+    changes = body.model_dump(exclude_unset=True)
+    if changes.get("username") is not None:
+        try:
+            name = clean_username(changes["username"])
+        except AuthError as exc:
+            raise fail(422, exc) from exc
+        if name != user.username and db.scalar(select(User).where(User.username == name)):
+            raise HTTPException(422, "username_taken")
+        changes["username"] = name
+    if changes.get("name") is not None:
+        changes["name"] = changes["name"].strip() or user.username
+    for key, value in changes.items():
+        if value is not None:
+            setattr(user, key, value)
     db.commit()
     return user_out(user)
+
+
+@api.post("/users/{user_id}/password", dependencies=[Depends(admin_only)])
+def temp_password(
+    user_id: int, body: TempPassword, db: Session = Depends(get_db)
+) -> dict[str, str]:
+    """A temporary password for someone locked out: shown once, to be changed at their next
+    sign-in. Their sessions are closed; their data is untouched."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user_unknown")
+    password = body.password or temporary_password()
+    try:
+        set_password(db, user, password, temporary=True)
+    except AuthError as exc:
+        raise fail(422, exc) from exc
+    return {"password": password}
+
+
+@api.post("/users/{user_id}/unlock", response_model=UserOut, dependencies=[Depends(admin_only)])
+def unlock_user(user_id: int, db: Session = Depends(get_db)) -> UserOut:
+    """Opens an account that waits after too many wrong passwords, and re-enables it."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user_unknown")
+    user.disabled = False
+    unlock(db, user)
+    return user_out(user)
+
+
+class SignupIn(BaseModel):
+    open: bool
+
+
+@api.put("/system/signup", dependencies=[Depends(admin_only)])
+def set_signup(body: SignupIn, db: Session = Depends(get_db)) -> dict[str, bool]:
+    row = db.get(Setting, "signup")
+    value = "on" if body.open else "off"
+    if row is None:
+        db.add(Setting(key="signup", value=value))
+    else:
+        row.value = value
+    db.commit()
+    return {"open": body.open}
 
 
 @api.delete("/users/{user_id}")
@@ -366,6 +465,8 @@ def new_token(
     body: TokenIn, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     """The token is in the answer ONLY here: copy it now."""
+    if who.user.is_admin:
+        raise HTTPException(403, "admin_has_no_finances")
     try:
         token, secret = create_token(db, who.user, body.name, body.scopes)
     except AuthError as exc:

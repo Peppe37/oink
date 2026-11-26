@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from oink.api import documents as documents_api
 from oink.api.admin import ai_store
 from oink.api.admin import router as admin_router
 from oink.api.documents import router as documents_router
@@ -22,7 +23,7 @@ from oink.api.routes import api
 from oink.core.config import Settings, get_settings
 from oink.core.db import Database
 from oink.core.oidc import OIDC
-from oink.core.security import Vault, create_user, user_count
+from oink.core.security import Vault, ensure_admin
 from oink.services import documents, jobs, updates
 from oink.services.ai import AI
 from oink.services.stores import Stores
@@ -47,14 +48,7 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
     db.create(settings.admin_username)
     vault = Vault(settings.secret_key, settings.data_dir)
     with db.sessions() as session:
-        if user_count(session) == 0 and settings.admin_password:
-            create_user(
-                session,
-                settings.admin_username,
-                settings.admin_password,
-                admin=True,
-                base_currency=settings.currency,
-            )
+        ensure_admin(session, settings.admin_username, settings.admin_password)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -63,6 +57,8 @@ def create_app(settings: Settings | None = None, *, background: bool = True) -> 
             if background
             else None
         )
+        if background:  # readings cut short by a restart start again
+            documents_api.resume(app)
         yield
         if task is not None:
             task.cancel()

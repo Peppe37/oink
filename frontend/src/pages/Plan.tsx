@@ -165,10 +165,13 @@ function FixedHistory({ item, onEdit, onStopped }: { item: FixedItem; onEdit: ()
         <div className="list">
           {data.payments.map((p) => (
             <div key={p.id} className="item"><span className="item-main"><span className="row-text"><span className="row-title ellipsis">{p.name}</span>
-              <span className="row-detail">{fmt.date(p.day, { day: "numeric", month: "long", year: "numeric" })}</span></span>
+              <span className="row-detail">{fmt.date(p.day, { day: "numeric", month: "long", year: "numeric" })}{p.elsewhere ? ` · ${t("plan.paidElsewhere")}` : ""}</span></span>
               <span className="num">{fmt.money(p.amount, p.currency)}</span></span></div>
           ))}
         </div>
+      )}
+      {(data?.skipped?.length ?? 0) > 0 && (
+        <p className="faint small-text">{t("plan.skippedList", { dates: data!.skipped!.map((d) => fmt.date(d, { day: "numeric", month: "short", year: "numeric" })).join(", ") })}</p>
       )}
       <div className="row between wrap" style={{ gap: 8 }}>
         <button className="btn ghost" onClick={onEdit}><Icon name="pencil" size={16} /> {t("common.edit")}</button>

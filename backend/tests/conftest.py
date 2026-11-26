@@ -32,17 +32,32 @@ def client(settings: Settings) -> Iterator[TestClient]:
         yield c
 
 
+OWNER = "giuseppe"
+
+
 @pytest.fixture
 def owner(client: TestClient) -> TestClient:
-    reply = client.post("/api/auth/login", json={"username": ADMIN, "password": PASSWORD})
+    """A person with their finances: signed up by themselves."""
+    reply = client.post(
+        "/api/auth/signup", json={"username": OWNER, "password": PASSWORD, "language": "it"}
+    )
     assert reply.status_code == 200, reply.text
     return client
 
 
 @pytest.fixture
-def second(owner: TestClient, settings: Settings) -> TestClient:
+def admin(client: TestClient, owner: TestClient) -> TestClient:
+    """The service admin, in its own browser: people and settings, no finances."""
+    other = TestClient(client.app, base_url="https://oink.test")
+    reply = other.post("/api/auth/login", json={"username": ADMIN, "password": PASSWORD})
+    assert reply.status_code == 200, reply.text
+    return other
+
+
+@pytest.fixture
+def second(owner: TestClient, admin: TestClient) -> TestClient:
     """Another user of the same instance, invited by the admin, in their own browser."""
-    invite = owner.post("/api/users", json={"username": "marta"}).json()["invite_url"]
+    invite = admin.post("/api/users", json={"username": "marta"}).json()["invite_url"]
     token = invite.rsplit("/", 1)[1]
     other = TestClient(owner.app, base_url="https://oink.test")
     reply = other.post("/api/auth/invite", json={"token": token, "password": "marta-password-1"})

@@ -2,8 +2,8 @@
    decimal strings in their own currency; reports are numbers in the user's main currency.
    Errors carry a short code (translated with useErrorText). */
 
-export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string; sso: boolean };
-export type Status = { configured: boolean; user: User | null; ai: boolean; ai_reads_text: boolean; banking: boolean; version: string; sso: string | null; password_login: boolean };
+export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string; sso: boolean; must_change_password?: boolean; locked?: boolean };
+export type Status = { configured: boolean; user: User | null; ai: boolean; ai_reads_text: boolean; banking: boolean; version: string; sso: string | null; password_login: boolean; signup?: boolean };
 export type Account = {
   id: number; name: string; kind: string; institution: string; iban: string; currency: string; source: string;
   balance: string | null; balance_at: string | null; color: string; archived: boolean; connection_id: number | null;
@@ -121,6 +121,7 @@ export const api = {
   health: () => call<{ ok: boolean; version: string }>("/health"),
   status: () => call<Status>("/auth/status"),
   setup: (body: { username: string; password: string; language: string; base_currency: string }) => call("/auth/setup", { method: "POST", body: json(body) }),
+  signup: (body: { username: string; password: string; name: string; language: string; base_currency: string }) => call("/auth/signup", { method: "POST", body: json(body) }),
   login: (username: string, password: string) => call("/auth/login", { method: "POST", body: json({ username, password }) }),
   invite: (token: string) => call<{ username: string; name: string }>(`/auth/invite/${encodeURIComponent(token)}`),
   acceptInvite: (token: string, password: string) => call("/auth/invite", { method: "POST", body: json({ token, password }) }),
@@ -152,6 +153,7 @@ export const api = {
 
   untrackedTransfers: () => call<{ institution: string; currency: string; count: number; total: string; last: string }[]>("/transfers/untracked"),
   reprocessDocument: (id: number) => call<Doc>(`/documents/${id}/reprocess`, { method: "POST" }),
+  stopDocument: (id: number) => call<Doc>(`/documents/${id}/stop`, { method: "POST" }),
   dismissDocument: (id: number) => call<Doc>(`/documents/${id}/dismiss`, { method: "POST" }),
   documents: (params: { kind?: string; q?: string; status?: string } = {}) => call<Doc[]>(`/documents?${query(params)}`),
   document: (id: number) => call<Doc>(`/documents/${id}`),
@@ -192,7 +194,10 @@ export const api = {
   users: () => call<User[]>("/users"),
   addUser: (username: string, name: string) => call<{ user: User; invite_url: string }>("/users", { method: "POST", body: json({ username, name }) }),
   reinvite: (id: number) => call<{ invite_url: string }>(`/users/${id}/invite`, { method: "POST" }),
-  patchUser: (id: number, body: Partial<Pick<User, "is_admin" | "disabled" | "name">>) => call<User>(`/users/${id}`, { method: "PATCH", body: json(body) }),
+  tempPassword: (id: number) => call<{ password: string }>(`/users/${id}/password`, { method: "POST", body: json({}) }),
+  unlockUser: (id: number) => call<User>(`/users/${id}/unlock`, { method: "POST" }),
+  setSignup: (open: boolean) => call<{ open: boolean }>("/system/signup", { method: "PUT", body: json({ open }) }),
+  patchUser: (id: number, body: Partial<Pick<User, "disabled" | "name" | "username">>) => call<User>(`/users/${id}`, { method: "PATCH", body: json(body) }),
   deleteUser: (id: number) => call(`/users/${id}`, { method: "DELETE" }),
 
   holdings: () => call<Holdings>("/holdings"),
@@ -221,9 +226,11 @@ export const api = {
   deleteFixed: (id: number) => call(`/fixed-costs/${id}`, { method: "DELETE" }),
   updateFixed: (id: number, body: { name: string; amount: string; currency: string; frequency: string; category?: string; next_due?: string | null; match?: string; active?: boolean }) =>
     call(`/fixed-costs/${id}`, { method: "PUT", body: json(body) }),
-  fixedPayments: (id: number) => call<{ payments: { id: number; day: string; amount: string; currency: string; name: string }[]; count: number; total: string; next_due: string | null }>(`/fixed-costs/${id}/payments`),
+  fixedPayments: (id: number) => call<{ payments: { id: number; day: string; amount: string; currency: string; name: string; elsewhere?: boolean }[]; skipped?: string[]; count: number; total: string; next_due: string | null }>(`/fixed-costs/${id}/payments`),
   missingFixed: () => call<{ id: number; name: string; amount: string; currency: string; due: string; days_late: number }[]>("/fixed-costs/missing"),
-  waitFixed: (id: number, days = 7) => call(`/fixed-costs/${id}/wait`, { method: "POST", body: json({ days }) }),
+  skipFixed: (id: number) => call<{ next_due: string }>(`/fixed-costs/${id}/skip`, { method: "POST" }),
+  paidFixed: (id: number, body: { account_id: number; day?: string; balance_updated: boolean }) => call<{ transaction_id: number }>(`/fixed-costs/${id}/paid`, { method: "POST", body: json(body) }),
+  waitFixed: (id: number, days = 1) => call(`/fixed-costs/${id}/wait`, { method: "POST", body: json({ days }) }),
   stopFixed: (id: number) => call(`/fixed-costs/${id}/stop`, { method: "POST" }),
   splitFixed: (id: number, parts: { name: string; amount: string; frequency: string; next_due?: string | null }[]) =>
     call<{ ids: number[] }>(`/fixed-costs/${id}/split`, { method: "POST", body: json({ parts }) }),

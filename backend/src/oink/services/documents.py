@@ -12,6 +12,7 @@ uploading the monthly PDF is enough to keep an account up to date without a bank
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import hashlib
@@ -681,7 +682,7 @@ async def process(
     try:
         extraction = await read_file(doc.filename, raw, ai, stores)
     except DocumentError as exc:
-        doc.status, doc.review = "error", {"error": exc.code}
+        doc.status, doc.review = "error", {**wishes(doc), "error": exc.code}
         db.commit()
         return None
     body = extraction.text
@@ -729,6 +730,12 @@ async def process(
     return outcome
 
 
+def wishes(doc: Document) -> dict[str, Any]:
+    """What the person asked at upload (kind, account, import): kept for «read again»."""
+    review = doc.review or {}
+    return {k: review[k] for k in ("wanted_kind", "account_id", "import") if k in review}
+
+
 async def process_later(sessions: Any, doc_id: int, ai: AI, folder: Path) -> None:
     """The slow part of an upload (reading with Docling, embeddings), after the reply."""
     with sessions() as db:
@@ -738,6 +745,13 @@ async def process_later(sessions: Any, doc_id: int, ai: AI, folder: Path) -> Non
             return
         try:
             await process(db, user, doc, path_of(folder, doc).read_bytes(), ai, stores_in_use())
+        except asyncio.CancelledError:  # «stop» from the app
+            db.rollback()
+            doc = db.get(Document, doc_id)
+            if doc is not None and doc.status == "processing":
+                doc.status, doc.review = "error", {**wishes(doc), "error": "stopped"}
+                db.commit()
+            raise
         except Exception:  # never leave a document «processing» forever
             log.exception("processing document %s failed", doc_id)
             db.rollback()

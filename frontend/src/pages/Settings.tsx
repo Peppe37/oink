@@ -24,7 +24,7 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
 
   return (
     <motion.div className="page narrow" variants={stagger} initial="hidden" animate="show">
-      <PageHeader title={t("settings.title")} />
+      <PageHeader title={user.is_admin ? t("admin.title") : t("settings.title")} />
       <motion.div variants={rise}>
         <Glass className="card profile-card">
           <span className="avatar">{(user.name || user.username).slice(0, 1).toUpperCase()}</span>
@@ -33,10 +33,10 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
       </motion.div>
       <motion.div variants={rise}>
         <Glass className="card list group">
-          {item("profile", "user", ["#ff8cc0", "#c94b8c"], t("settings.profile"), `${LANGUAGES[lang]} · ${user.base_currency}`)}
+          {item("profile", "user", ["#ff8cc0", "#c94b8c"], t("settings.profile"), user.is_admin ? LANGUAGES[lang] : `${LANGUAGES[lang]} · ${user.base_currency}`)}
           {item("password", "key", ["#ffd76a", "#f2a71b"], t("settings.security"))}
-          {item("apps", "link", ["#6cc9ff", "#2f86e8"], t("settings.apps"))}
-          {item("mcp", "sparkle", ["#cf95ff", "#9550e8"], t("settings.mcp"))}
+          {!user.is_admin && item("apps", "link", ["#6cc9ff", "#2f86e8"], t("settings.apps"))}
+          {!user.is_admin && item("mcp", "sparkle", ["#cf95ff", "#9550e8"], t("settings.mcp"))}
         </Glass>
       </motion.div>
       {user.is_admin && (
@@ -261,54 +261,96 @@ function AppsPanel() {
 }
 
 function UsersPanel({ me }: { me: User }) {
-  const { t } = useI18n();
+  const { t, fmt } = useI18n();
   const errorText = useErrorText();
   const [users, setUsers] = useState<User[]>([]);
+  const [open, setOpen] = useState<boolean | null>(null);
   const [username, setUsername] = useState("");
   const [link, setLink] = useState<{ name: string; url: string } | null>(null);
+  const [temp, setTemp] = useState<{ name: string; password: string } | null>(null);
+  const [editing, setEditing] = useState<User | null>(null);
   const [error, setError] = useState("");
   const load = () => api.users().then(setUsers);
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); api.status().then((s) => setOpen(!!s.signup)); }, []);
+  const run = async (job: () => Promise<unknown>) => { try { setError(""); await job(); await load(); } catch (err) { setError(errorText(err)); } };
   const invite = async (e: FormEvent) => {
     e.preventDefault();
-    try {
-      const out = await api.addUser(username, "");
-      setLink({ name: out.user.username, url: out.invite_url });
-      setUsername("");
-      setError("");
-      load();
-    } catch (err) { setError(errorText(err)); }
+    await run(async () => { const out = await api.addUser(username, ""); setLink({ name: out.user.username, url: out.invite_url }); setUsername(""); });
   };
+  const people = users.filter((u) => u.id !== me.id);
   return (
     <div className="stack">
-      <p className="muted">{t("settings.usersHint")}</p>
+      <div className="list group">
+        <label className="item switch-row">
+          <span className="row-text"><span className="row-title">{t("admin.signup")}</span><span className="row-detail">{t("admin.signupHint")}</span></span>
+          <input type="checkbox" className="switch" checked={!!open} disabled={open === null}
+            onChange={(e) => { const v = e.target.checked; setOpen(v); api.setSignup(v).catch((err) => { setOpen(!v); setError(errorText(err)); }); }} />
+        </label>
+      </div>
       <form className="ask" onSubmit={invite}>
         <input className="field" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} placeholder={t("auth.username")} required autoCapitalize="none" />
         <button className="btn">{t("settings.invite")}</button>
       </form>
       {error && <div className="error">{error}</div>}
       {link && <div className="stack"><span>{t("settings.inviteCreated", { name: link.name })}</span><Secret value={link.url} /></div>}
-      <div className="list">
-        {users.map((u) => (
-          <div key={u.id} className="item">
-            <span className="avatar small">{(u.name || u.username).slice(0, 1).toUpperCase()}</span>
-            <span className="item-main user-row">
-            <span className="row-text">
-              <span className="row-title">{u.name || u.username} <span className="faint small-text">@{u.username}</span></span>
-              <span className="row-detail">{[u.is_admin && t("settings.admin"), u.disabled && t("settings.disabled")].filter(Boolean).join(" · ")}</span>
-            </span>
-            {u.id !== me.id && (
-              <span className="row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <button className="btn ghost small" onClick={async () => { const r = await api.reinvite(u.id); setLink({ name: u.username, url: r.invite_url }); }}>{t("settings.resetLink")}</button>
-                <button className="btn ghost small" onClick={() => api.patchUser(u.id, { disabled: !u.disabled }).then(load)}>{u.disabled ? t("settings.enable") : t("settings.disable")}</button>
-                <button className="btn ghost small danger" aria-label={t("settings.deleteUser")} title={t("settings.deleteUser")} onClick={async () => { if (confirm(`${t("settings.deleteUser")}: ${u.username}. ${t("common.confirmDelete")}`)) { await api.deleteUser(u.id); load(); } }}><Icon name="trash" size={16} /></button>
+      {temp && <div className="stack"><span>{t("admin.tempCreated", { name: temp.name })}</span><Secret value={temp.password} /></div>}
+      <h4 className="section-label">{t("admin.people", { count: people.length })}</h4>
+      {people.length === 0 ? <p className="muted">{t("admin.nobody")}</p> : (
+        <div className="list group">
+          {people.map((u) => (
+            <div key={u.id} className="item user-item">
+              <span className="avatar small">{(u.name || u.username).slice(0, 1).toUpperCase()}</span>
+              <span className="row-text">
+                <span className="row-title">{u.name || u.username} <span className="faint small-text">@{u.username}</span></span>
+                <span className="row-detail">
+                  {[u.locked && t("admin.locked"), u.disabled && t("settings.disabled"), u.must_change_password && t("admin.mustChange"), u.sso && "SSO",
+                    t("admin.since", { date: fmt.date(u.created, { day: "numeric", month: "short", year: "numeric" }) })].filter(Boolean).join(" · ")}
+                </span>
               </span>
-            )}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span className="user-actions">
+                {(u.locked || u.disabled) && <button className="btn small" onClick={() => run(() => api.unlockUser(u.id))}>{t("admin.unlock")}</button>}
+                <button className="btn ghost small icon-only" aria-label={t("admin.edit")} title={t("admin.edit")} onClick={() => setEditing(u)}><Icon name="pencil" size={16} /></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <Sheet open={!!editing} onClose={() => setEditing(null)} title={editing ? (editing.name || editing.username) : ""}>
+        {editing && <UserEdit user={editing} onClose={() => setEditing(null)}
+          onLink={(url) => { setLink({ name: editing.username, url }); setEditing(null); }}
+          onTemp={(password) => { setTemp({ name: editing.username, password }); setEditing(null); load(); }}
+          onChanged={() => { setEditing(null); load(); }} />}
+      </Sheet>
     </div>
+  );
+}
+
+function UserEdit({ user, onClose, onLink, onTemp, onChanged }: { user: User; onClose: () => void; onLink: (url: string) => void; onTemp: (p: string) => void; onChanged: () => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [name, setName] = useState(user.name);
+  const [username, setUsername] = useState(user.username);
+  const [error, setError] = useState("");
+  const run = async (job: () => Promise<void>) => { try { setError(""); await job(); } catch (err) { setError(errorText(err)); } };
+  const save = (e: FormEvent) => { e.preventDefault(); run(async () => { await api.patchUser(user.id, { name, username }); onChanged(); }); };
+  return (
+    <form className="stack" onSubmit={save}>
+      <Field label={t("settings.name")}><input className="field" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      <Field label={t("auth.username")}><input className="field" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} autoCapitalize="none" required /></Field>
+      <button className="btn big-btn">{t("common.save")}</button>
+      <div className="list group">
+        <Row icon={<Tile icon="key" from="#ffd76a" to="#f2a71b" size={30} />} title={t("admin.tempPassword")} detail={t("admin.tempPasswordHint")}
+          onClick={() => run(async () => onTemp((await api.tempPassword(user.id)).password))} chevron />
+        <Row icon={<Tile icon="link" from="#6cc9ff" to="#2f86e8" size={30} />} title={t("settings.resetLink")} detail={t("admin.resetLinkHint")}
+          onClick={() => run(async () => onLink((await api.reinvite(user.id)).invite_url))} chevron />
+        <Row icon={<Tile icon="shield" from="#b3aec2" to="#7c7690" size={30} />} title={user.disabled ? t("settings.enable") : t("settings.disable")} detail={t("admin.disableHint")}
+          onClick={() => run(async () => { await api.patchUser(user.id, { disabled: !user.disabled }); onChanged(); })} />
+        <Row icon={<Tile icon="trash" from="#ff8aa0" to="#e8456a" size={30} />} title={t("settings.deleteUser")} detail={t("admin.deleteHint")}
+          onClick={() => run(async () => { if (confirm(`${t("settings.deleteUser")}: ${user.username}. ${t("common.confirmDelete")}`)) { await api.deleteUser(user.id); onChanged(); } })} />
+      </div>
+      {error && <div className="error">{error}</div>}
+      <button type="button" className="btn ghost" onClick={onClose}>{t("common.cancel")}</button>
+    </form>
   );
 }
 

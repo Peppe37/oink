@@ -9,6 +9,7 @@ Each request is signed with a short-lived RS256 JWT (the app id is the key id).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -119,10 +120,32 @@ class EnableBanking:
         return str(data["url"])
 
     async def finish(self, code: str) -> dict[str, Any]:
-        """{session_id, valid_until, accounts: [RemoteAccount]}"""
+        """{session_id, valid_until, accounts: [RemoteAccount]}
+
+        Some banks (Intesa Sanpaolo among them) answer the login with no accounts and list
+        them on the session a moment later: then the session is asked again."""
         data = await self._call("POST", "/sessions", json={"code": code})
+        found = list(data.get("accounts") or [])
+        bank = (data.get("aspsp") or {}).get("name", "?")
+        log.info("bank session %s: %d accounts, status %s", bank, len(found), data.get("status"))
+        tries = 0
+        while not found and data.get("session_id") and tries < 3:
+            tries += 1
+            await asyncio.sleep(2 * tries)
+            again = await self._call("GET", f"/sessions/{data['session_id']}")
+            for item in again.get("accounts_data") or again.get("accounts") or []:
+                uid = item.get("uid") if isinstance(item, dict) else item
+                if not uid:
+                    continue
+                try:
+                    details = await self._call("GET", f"/accounts/{uid}/details")
+                except ProviderError:
+                    details = item if isinstance(item, dict) else {}
+                found.append({**details, "uid": uid})
+            log.info("bank session asked again (%d): %d accounts, status %s", tries,
+                     len(found), again.get("status", "?"))  # fmt: skip
         accounts = []
-        for acc in data.get("accounts", []):
+        for acc in found:
             iban = (acc.get("account_id") or {}).get("iban") or ""
             accounts.append(
                 RemoteAccount(

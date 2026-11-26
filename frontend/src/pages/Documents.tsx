@@ -268,7 +268,18 @@ function DocSheet({ doc, accounts, onClose, onChanged, onDeleted, notify }: {
         </div>
         {doc.review.account_warning && <AccountWarning doc={doc} accounts={accounts} notify={notify} onChanged={onChanged} />}
         {doc.status === "review" && <ReviewCard doc={doc} accounts={accounts} target={target} notify={notify} onChanged={onChanged} />}
-        {doc.status === "processing" && <p className="note"><Spinner /> {t("docs.status.processing")}</p>}
+        {doc.status === "processing" && (
+          <div className="note row between wrap" style={{ gap: 10 }}>
+            <span className="row" style={{ gap: 8 }}><Spinner /> {t("docs.readingLong")}</span>
+            <button className="btn ghost small" onClick={async () => { try { onChanged(await api.stopDocument(doc.id)); } catch (e) { notify(errorText(e)); } }}>{t("docs.stop")}</button>
+          </div>
+        )}
+        {doc.status === "error" && (
+          <div className="note row between wrap" style={{ gap: 10 }}>
+            <span>{t(`docs.failed.${["stopped", "interrupted"].includes(String(doc.review.error)) ? String(doc.review.error) : "other"}` as never)}</span>
+            <button className="btn small" onClick={async () => { try { onChanged(await api.reprocessDocument(doc.id)); } catch (e) { notify(errorText(e)); } }}>{t("docs.reprocess")}</button>
+          </div>
+        )}
         {!doc.has_text && doc.status !== "processing" && <p className="note"><Icon name="shield" size={18} /> {t("docs.noText")}</p>}
         {doc.summary && <div><h4 className="section-label">{t("docs.summary")}</h4><p style={{ margin: 0 }}>{doc.summary}</p></div>}
         {doc.import_note === "account_not_recognised" && doc.facts.proposed_account && (

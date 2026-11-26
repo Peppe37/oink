@@ -1,7 +1,12 @@
 """Who may do what.
 
 - People sign in with username and password: a session cookie (HttpOnly, SameSite=Strict).
-  The first user is the admin; the admin invites the others with one-time links.
+  They sign up by themselves (unless the admin turned it off) or get a one-time link.
+- The service admin (`OINK_ADMIN_USERNAME`, «admin») only manages people and settings:
+  it has no accounts or money of its own and cannot see anyone's. Its first password is
+  `OINK_ADMIN_PASSWORD` or «oink», which must be changed at the first sign-in.
+- After LOCK_AFTER wrong passwords in a row an account waits LOCK_MINUTES; the admin can
+  unlock it, rename it or give it a temporary password.
 - Other apps (an assistant…): `Authorization: Bearer oink_...` tokens, each acting for one
   user with fine-grained scopes.
 
@@ -32,6 +37,8 @@ from oink.core.db import ApiToken, Invite, LoginSession, User, aware
 COOKIE = "oink_session"
 TOKEN_PREFIX = "oink_"
 MIN_PASSWORD = 10
+DEFAULT_ADMIN_PASSWORD = "oink"
+LOCK_AFTER, LOCK_MINUTES = 8, 15
 USERNAME = re.compile(r"^[a-z0-9][a-z0-9._-]{1,39}$")
 NEVER = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -120,18 +127,75 @@ def create_user(
     return user
 
 
+def locked(user: User) -> bool:
+    until = aware(user.locked_until)
+    return until is not None and until > datetime.now(UTC)
+
+
 def authenticate(db: Session, username: str, password: str) -> User | None:
+    """The user, or None. Raises AuthError("account_locked") while an account waits after
+    too many wrong passwords (the right password doesn't open it early: the admin can)."""
     user = db.scalar(select(User).where(User.username == username.strip().lower()))
     if user is None or user.disabled:
         _hasher.hash("timing-equaliser")  # same cost whether the user exists or not
         return None
-    return user if verify_password(user.password_hash, password) else None
+    if locked(user):
+        raise AuthError("account_locked")
+    if verify_password(user.password_hash, password):
+        if user.failed_logins:
+            user.failed_logins, user.locked_until = 0, None
+            db.commit()
+        return user
+    user.failed_logins = (user.failed_logins or 0) + 1
+    if user.failed_logins >= LOCK_AFTER:
+        user.locked_until = datetime.now(UTC) + timedelta(minutes=LOCK_MINUTES)
+        user.failed_logins = 0
+    db.commit()
+    return None
 
 
-def set_password(db: Session, user: User, password: str) -> None:
+def unlock(db: Session, user: User) -> None:
+    user.failed_logins, user.locked_until = 0, None
+    db.commit()
+
+
+def set_password(db: Session, user: User, password: str, *, temporary: bool = False) -> None:
+    """A new password closes every session. A temporary one (given by the admin) must be
+    changed at the next sign-in."""
     user.password_hash = hash_password(password)
+    user.must_change_password = temporary
+    user.failed_logins, user.locked_until = 0, None
     db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
     db.commit()
+
+
+def temporary_password() -> str:
+    return secrets.token_urlsafe(9)  # 12 characters
+
+
+def ensure_admin(db: Session, username: str, password: str) -> User:
+    """The service admin exists. When it is created, people who were admins before become
+    ordinary users: they keep their finances, the admin keeps the service."""
+    name = clean_username(username or "admin")
+    admin = db.scalar(select(User).where(User.username == name))
+    if admin is not None:
+        if not admin.is_admin:
+            admin.is_admin = True
+            db.commit()
+        return admin
+    admin = User(
+        username=name,
+        name="Admin",
+        password_hash=_hasher.hash(password or DEFAULT_ADMIN_PASSWORD),
+        is_admin=True,
+        must_change_password=not password or password == DEFAULT_ADMIN_PASSWORD,
+    )
+    db.add(admin)
+    db.flush()
+    for other in db.scalars(select(User).where(User.is_admin.is_(True), User.id != admin.id)):
+        other.is_admin = False
+    db.commit()
+    return admin
 
 
 # -- invites ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ import { Documents } from "./pages/Documents";
 import { Home } from "./pages/Home";
 import { Insights } from "./pages/Insights";
 import { Invest } from "./pages/Invest";
-import { Invite, Login } from "./pages/Login";
+import { Invite, Login, MustChangePassword } from "./pages/Login";
 import { Settings } from "./pages/Settings";
 import { UpdatePrompt, useUpdate } from "./pages/Update";
 import { Aurora, Navigation, Toast } from "./ui/bits";
@@ -35,11 +35,35 @@ function Shell() {
       ) : !status ? null : invite && !status.user ? (
         <Invite token={invite} onDone={refresh} />
       ) : !status.user ? (
-        <Login firstRun={!status.configured} onDone={refresh} onLanguage={setLang} sso={status.sso} passwordLogin={status.password_login} />
+        <Login canSignUp={!!status.signup} onDone={refresh} onLanguage={setLang} sso={status.sso} passwordLogin={status.password_login} />
+      ) : status.user.must_change_password ? (
+        <MustChangePassword onDone={refresh} />
+      ) : status.user.is_admin ? (
+        <AdminApp status={status} onStatus={refresh} onLanguage={setLang} />
       ) : (
         <App status={status} onStatus={refresh} onLanguage={setLang} />
       )}
     </I18nProvider>
+  );
+}
+
+/* The service admin: people and settings only, no money (its own or anyone's). */
+function AdminApp({ status, onStatus, onLanguage }: { status: Status; onStatus: () => void; onLanguage: (l: Lang) => void }) {
+  const user = status.user!;
+  const [toast, setToast] = useState("");
+  const notify = useCallback((text: string) => setToast(text), []);
+  const { info, pending } = useUpdate(true);
+  const [showUpdate, setShowUpdate] = useState(false);
+  useEffect(() => { if (pending) setShowUpdate(true); }, [pending]);
+  return (
+    <>
+      <div className="app">
+        <Settings user={user} notify={notify} onLogout={onStatus} onUpdate={() => setShowUpdate(true)}
+          onUser={(u) => { onLanguage(resolveLanguage(u.language)); onStatus(); }} />
+      </div>
+      <UpdatePrompt info={info} open={showUpdate} onClose={() => setShowUpdate(false)} />
+      <AnimatePresence>{toast && <Toast key={toast} text={toast} onDone={() => setToast("")} />}</AnimatePresence>
+    </>
   );
 }
 

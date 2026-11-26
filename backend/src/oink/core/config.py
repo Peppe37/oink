@@ -19,9 +19,18 @@ class Settings(BaseSettings):
         default="http://localhost:8080",
         description="Where the app is reached: bank authorisations come back here.",
     )
-    admin_username: str = "admin"
+    admin_username: str = Field(
+        default="admin",
+        description="The service admin: manages people and settings, has no finances.",
+    )
     admin_password: str = Field(
-        default="", description="First run only: creates the admin (or do it in the browser)."
+        default="",
+        description="Password of the service admin when it is created. Empty = «oink», "
+        "which must be changed at the first sign-in.",
+    )
+    signup: bool = Field(
+        default=True,
+        description="People can create their own account (the admin can turn it off in the app).",
     )
     secret_key: str = Field(
         default="", description="Encrypts API keys of linked accounts. Empty = generated."
@@ -49,6 +58,9 @@ class Settings(BaseSettings):
         default=1, ge=1, le=28, description="Day of the month manual accounts ask a statement."
     )
     session_days: int = 30
+    engine_timeout: int = Field(
+        default=7200, ge=60, description="Seconds a document may take to be read."
+    )
 
     # Single sign-on (OpenID Connect: Keycloak, Authentik, Google…). Empty issuer = off.
     oidc_issuer: str = Field(default="", description="e.g. https://sso.example.com/realms/home")

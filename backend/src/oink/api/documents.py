@@ -19,7 +19,7 @@ from oink.services import documents as docs
 from oink.services.ai import AI
 
 router = APIRouter(prefix="/api/documents")
-_TASKS: set[asyncio.Task[None]] = set()  # documents being read in the background
+_TASKS: dict[int, asyncio.Task[None]] = {}  # documents being read in the background
 Kind = Literal[
     "statement",
     "payslip",
@@ -149,14 +149,38 @@ async def upload(
     except docs.DocumentError as exc:
         raise _fail(exc) from exc
     if later and not stored.duplicate:
-        task = asyncio.create_task(
-            docs.process_later(
-                request.app.state.db.sessions, stored.document.id, _ai(request), _folder(request)
-            )
-        )
-        _TASKS.add(task)
-        task.add_done_callback(_TASKS.discard)
+        _start(request.app, stored.document.id)
     return _outcome(stored)
+
+
+def _start(app: Any, doc_id: int) -> None:
+    """Read a document in the background (Docling can take minutes on a long statement)."""
+    old = _TASKS.get(doc_id)
+    if old is not None and not old.done():
+        return
+    task = asyncio.create_task(
+        docs.process_later(
+            app.state.db.sessions, doc_id, app.state.ai, app.state.settings.documents_dir
+        )
+    )
+    _TASKS[doc_id] = task
+    task.add_done_callback(lambda t: _TASKS.pop(doc_id, None) if _TASKS.get(doc_id) is t else None)
+
+
+def resume(app: Any) -> None:
+    """At startup: documents left «processing» by a restart are read again."""
+    with app.state.db.sessions() as db:
+        waiting = list(db.scalars(select(Document.id).where(Document.status == "processing")))
+    stores = docs.stores_in_use()
+    for doc_id in waiting:
+        if stores is not None and stores.engine.enabled:
+            _start(app, doc_id)
+        else:
+            with app.state.db.sessions() as db:
+                doc = db.get(Document, doc_id)
+                if doc is not None:
+                    doc.status, doc.review = "error", {**docs.wishes(doc), "error": "interrupted"}
+                    db.commit()
 
 
 @router.get("/search")
@@ -321,9 +345,37 @@ async def reprocess_document(
     path = docs.path_of(_folder(request), doc)
     if not path.is_file():
         raise HTTPException(404, "file_missing")
+    task = _TASKS.get(doc_id)
+    if task is not None and not task.done():
+        return docs.to_dict(doc)  # already being read
     doc.status = "processing"
     db.commit()
-    await docs.process(db, who.user, doc, path.read_bytes(), _ai(request), docs.stores_in_use())
+    stores = docs.stores_in_use()
+    if stores is not None and stores.engine.enabled:
+        _start(request.app, doc_id)  # the slow way: in the background, like an upload
+        return docs.to_dict(doc)
+    await docs.process(db, who.user, doc, path.read_bytes(), _ai(request), stores)
+    return docs.to_dict(doc)
+
+
+@router.post("/{doc_id}/stop")
+async def stop_document(
+    doc_id: int,
+    who: Caller = Depends(require("documents:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Stop reading a document (too long, stuck): it can be read again with «reprocess»."""
+    doc = _mine(db, who, doc_id)
+    task = _TASKS.pop(doc_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    stores = docs.stores_in_use()
+    if stores is not None and stores.engine.enabled:
+        await stores.engine.cancel()  # Docling stops too, not only the wait for it
+    db.refresh(doc)
+    if doc.status == "processing":
+        doc.status, doc.review = "error", {**docs.wishes(doc), "error": "stopped"}
+        db.commit()
     return docs.to_dict(doc)
 
 

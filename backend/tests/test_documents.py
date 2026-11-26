@@ -272,3 +272,20 @@ def test_a_statement_finds_its_bank_and_a_doubtful_account_is_flagged_and_moved(
     assert accounts[revolut["id"]]["balance"] == "10.00"  # its balance is back to what it was
     in_revolut = owner.get("/api/transactions", params={"account_id": revolut["id"]}).json()
     assert in_revolut == []
+
+
+def test_a_reading_cut_short_can_be_stopped_and_read_again(owner: TestClient) -> None:
+    """A restart left a document «processing» (its reading died with the old process):
+    «stop» marks it, «read again» reads it, the upload's wishes kept."""
+    from oink.core.db import Document
+
+    doc = _upload(owner, "palestra.txt", CONTRACT, kind="contract").json()
+    with owner.app.state.db.sessions() as db:  # type: ignore[attr-defined]
+        row = db.get(Document, doc["id"])
+        row.status = "processing"
+        row.review = {"wanted_kind": "contract", "account_id": None, "import": True}
+        db.commit()
+    stopped = owner.post(f"/api/documents/{doc['id']}/stop").json()
+    assert stopped["status"] == "error" and stopped["review"]["error"] == "stopped"
+    again = owner.post(f"/api/documents/{doc['id']}/reprocess").json()
+    assert again["status"] == "ready" and again["kind"] == "contract"

@@ -1,7 +1,13 @@
 """Fixed costs know their payments: each one is found in the movements (its payee text and
 an amount close to the cost's), its next due date moves on by itself when it is paid, and a
-payment that doesn't come when expected is flagged (Home), until the person says «wait» or
-«this cost is over»."""
+payment that doesn't come when expected is flagged (Home). The person answers:
+
+- «wait»         it will come (a few days late): asked again tomorrow;
+- «paid»         paid another way (cash…): a movement is written on the account it came
+                 from, so it counts as spent like any other payment;
+- «skip»         not due this time (a month off, a free month): nothing spent, the next
+                 due date moves on, the history shows it as skipped;
+- «it's over»    cancelled: no longer expected, its history stays."""
 
 from __future__ import annotations
 
@@ -13,9 +19,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oink.core.db import FixedCost, Transaction, User
-from oink.core.money import from_minor
-from oink.services.ledger import normalise
+from oink.core.db import Account, FixedCost, Transaction, User
+from oink.core.money import from_minor, to_minor
+from oink.services.ledger import NewMovement, add_movements, normalise
 
 EARLY, LATE = 6, 5  # a payment counts from 6 days before the due date; flagged 5 days after
 MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}
@@ -93,13 +99,62 @@ def refresh(db: Session, user: User, today: date | None = None) -> list[dict[str
     return missing
 
 
+class FixedError(ValueError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _note(cost: FixedCost, event: dict[str, Any]) -> None:
+    cost.events = [*(cost.events or []), event][-120:]  # a new list: JSON columns need it
+
+
+def skip(db: Session, cost: FixedCost, today: date | None = None) -> date:
+    """«Not due this time»: the expected payment is dropped, the next one is expected."""
+    if cost.next_due is None:
+        raise FixedError("no_due_date")
+    _note(cost, {"due": cost.next_due.isoformat(), "kind": "skipped",
+                 "at": (today or date.today()).isoformat()})  # fmt: skip
+    cost.next_due = step(cost.next_due, cost.frequency)
+    cost.snoozed_until = None
+    db.commit()
+    return cost.next_due
+
+
+def paid_elsewhere(
+    db: Session, user: User, cost: FixedCost, account: Account, day: date,
+    balance_updated: bool = False,
+) -> Transaction:  # fmt: skip
+    """«Paid another way»: the payment is written on `account` (its balance goes down,
+    unless the person already counted it there), and the due date moves on."""
+    amount = -to_minor(cost.amount, account.currency)
+    move = NewMovement(day=day, amount=amount, description=cost.name,
+                       counterparty=cost.name, category=cost.category,
+                       )  # fmt: skip
+    result = add_movements(db, account, [move], "manual")
+    if not result.added:
+        raise FixedError("duplicate")
+    tx = result.added[0]
+    if account.source == "manual" and account.balance is not None and not balance_updated:
+        account.balance += amount
+    _note(cost, {"due": cost.next_due.isoformat() if cost.next_due else day.isoformat(),
+                 "kind": "paid", "tx": tx.id, "at": day.isoformat()})  # fmt: skip
+    cost.snoozed_until = None
+    db.commit()
+    refresh(db, user)  # the payment moves the due date on, like any other
+    return tx
+
+
 def history(db: Session, user: User, cost: FixedCost) -> dict[str, Any]:
     costs = list(db.scalars(select(FixedCost).where(FixedCost.user_id == user.id)))
     paid = payments(db, cost, _siblings(costs, cost))
     total = sum((-from_minor(t.amount, t.currency) for t in paid), Decimal(0))
+    elsewhere = {e.get("tx") for e in cost.events or [] if e.get("kind") == "paid"}
     return {
         "payments": [{"id": t.id, "day": t.day.isoformat(), "amount": str(from_minor(t.amount, t.currency)),
-                      "currency": t.currency, "name": t.counterparty or t.description} for t in paid[:60]],
+                      "currency": t.currency, "name": t.counterparty or t.description,
+                      "elsewhere": t.id in elsewhere} for t in paid[:60]],
+        "skipped": [e["due"] for e in cost.events or [] if e.get("kind") == "skipped"][::-1],
         "count": len(paid), "total": str(total),
         "next_due": cost.next_due.isoformat() if cost.next_due else None,
     }  # fmt: skip

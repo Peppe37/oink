@@ -11,7 +11,7 @@ from oink.core.config import Settings
 from oink.core.db import Rate
 from oink.providers import PROVIDERS
 from oink.providers.base import Field, Provider, RemoteAccount
-from tests.conftest import token
+from tests.conftest import PASSWORD, token
 
 CSV = (
     b"Conto IT60 X054 2811 1010 0000 0123 456\n"
@@ -21,25 +21,68 @@ CSV = (
 )
 
 
-def test_first_run_creates_the_admin(tmp_path: Path) -> None:
+def test_first_run_creates_the_service_admin(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path, update_check=False, enable_banking_key_file=tmp_path / "x"
     )
     with TestClient(create_app(settings, background=False), base_url="https://t") as c:
-        assert c.get("/api/auth/status").json()["configured"] is False
-        reply = c.post(
-            "/api/auth/setup",
-            json={"username": "Giu", "password": "abbastanza-lunga", "language": "it",
-                  "base_currency": "eur"},
-        )  # fmt: skip
-        assert reply.status_code == 200, reply.text
         status = c.get("/api/auth/status").json()
-        assert status["user"]["username"] == "giu" and status["user"]["is_admin"]
-        assert status["user"]["base_currency"] == "EUR"
+        assert status["configured"] and status["signup"]
         assert (
-            c.post("/api/auth/setup", json={"username": "x", "password": "y" * 12}).status_code
-            == 409
+            c.post("/api/auth/login", json={"username": "admin", "password": "oink"}).status_code
+            == 200
         )
+        me = c.get("/api/me").json()
+        assert me["is_admin"] and me["must_change_password"]
+        assert c.get("/api/users").json()["detail"] == "password_change_required"
+        reply = c.post("/api/auth/password", json={"current": "oink", "new": "una-nuova-password"})
+        assert reply.status_code == 200, reply.text
+        assert not c.get("/api/me").json()["must_change_password"]
+        assert c.get("/api/users").status_code == 200
+        assert c.get("/api/accounts").status_code == 403  # the admin has no finances
+        assert (
+            c.post("/api/tokens", json={"name": "x", "scopes": ["accounts:read"]}).status_code
+            == 403
+        )
+
+
+def test_people_sign_up_unless_the_admin_closes_it(client: TestClient, admin: TestClient) -> None:
+    other = TestClient(client.app, base_url="https://oink.test")
+    body = {"username": "Luca", "password": "luca-password-1", "base_currency": "usd"}
+    assert other.post("/api/auth/signup", json=body).status_code == 200
+    me = other.get("/api/me").json()
+    assert me["username"] == "luca" and not me["is_admin"] and me["base_currency"] == "USD"
+    assert other.post("/api/auth/signup", json=body).json()["detail"] == "username_taken"
+    assert admin.put("/api/system/signup", json={"open": False}).status_code == 200
+    assert not client.get("/api/auth/status").json()["signup"]
+    body["username"] = "anna"
+    assert other.post("/api/auth/signup", json=body).status_code == 403
+
+
+def test_the_admin_helps_someone_locked_out(owner: TestClient, admin: TestClient) -> None:
+    other = TestClient(owner.app, base_url="https://oink.test")
+    wrong = {"username": "giuseppe", "password": "sbagliata-sbagliata"}
+    for _ in range(8):
+        assert other.post("/api/auth/login", json=wrong).status_code == 401
+    good = {"username": "giuseppe", "password": PASSWORD}
+    assert other.post("/api/auth/login", json=good).json()["detail"] == "account_locked"
+    me = next(u for u in admin.get("/api/users").json() if u["username"] == "giuseppe")
+    assert me["locked"]
+    assert admin.post(f"/api/users/{me['id']}/unlock").json()["locked"] is False
+    assert other.post("/api/auth/login", json=good).status_code == 200
+    # renamed, and a temporary password to change at once
+    assert (
+        admin.patch(f"/api/users/{me['id']}", json={"username": "Giu", "name": "Giu"}).status_code
+        == 200
+    )
+    temp = admin.post(f"/api/users/{me['id']}/password", json={}).json()["password"]
+    assert other.get("/api/accounts").status_code == 401  # sessions closed
+    assert (
+        other.post("/api/auth/login", json={"username": "giu", "password": temp}).status_code == 200
+    )
+    assert other.get("/api/accounts").json()["detail"] == "password_change_required"
+    other.post("/api/auth/password", json={"current": temp, "new": "di-nuovo-mia-1"})
+    assert other.get("/api/accounts").status_code == 200
 
 
 def test_login_needs_the_right_password(client: TestClient) -> None:
@@ -48,7 +91,9 @@ def test_login_needs_the_right_password(client: TestClient) -> None:
     assert client.get("/api/accounts").status_code == 401
 
 
-def test_users_never_see_each_others_money(owner: TestClient, second: TestClient) -> None:
+def test_users_never_see_each_others_money(
+    owner: TestClient, second: TestClient, admin: TestClient
+) -> None:
     mine = owner.post("/api/accounts", json={"name": "Mine", "balance": "100"}).json()
     owner.post("/api/transactions", json={"account_id": mine["id"], "day": "2026-11-02",
                                           "amount": "-5", "description": "coffee"})  # fmt: skip
@@ -58,11 +103,12 @@ def test_users_never_see_each_others_money(owner: TestClient, second: TestClient
     assert second.post("/api/transactions", json={"account_id": mine["id"], "day": "2026-11-02",
                                                   "amount": "1", "description": "x"}).status_code == 404  # fmt: skip
     assert second.get("/api/users").status_code == 403  # not an admin
-    assert len(owner.get("/api/users").json()) == 2
+    assert owner.get("/api/users").status_code == 403
+    assert len(admin.get("/api/users").json()) == 3  # admin, giuseppe, marta
 
 
-def test_an_invite_works_once(owner: TestClient) -> None:
-    url = owner.post("/api/users", json={"username": "luca"}).json()["invite_url"]
+def test_an_invite_works_once(owner: TestClient, admin: TestClient) -> None:
+    url = admin.post("/api/users", json={"username": "luca"}).json()["invite_url"]
     assert url.startswith("https://oink.test/invite/")
     secret = url.rsplit("/", 1)[1]
     other = TestClient(owner.app, base_url="https://oink.test")
@@ -86,13 +132,13 @@ def test_an_invite_works_once(owner: TestClient) -> None:
     )
 
 
-def test_deleting_a_user_deletes_their_data(owner: TestClient, second: TestClient) -> None:
+def test_deleting_a_user_deletes_their_data(second: TestClient, admin: TestClient) -> None:
     second.post("/api/accounts", json={"name": "Hers"})
-    marta = next(u for u in owner.get("/api/users").json() if u["username"] == "marta")
-    assert owner.delete(f"/api/users/{marta['id']}").status_code == 200
+    marta = next(u for u in admin.get("/api/users").json() if u["username"] == "marta")
+    assert admin.delete(f"/api/users/{marta['id']}").status_code == 200
     assert second.get("/api/accounts").status_code == 401
-    me = next(u for u in owner.get("/api/users").json() if u["username"] == "admin")
-    assert owner.delete(f"/api/users/{me['id']}").status_code == 422
+    me = next(u for u in admin.get("/api/users").json() if u["username"] == "admin")
+    assert admin.delete(f"/api/users/{me['id']}").status_code == 422
 
 
 def test_tokens_have_scopes_and_act_for_their_user(owner: TestClient, second: TestClient) -> None:
@@ -199,12 +245,12 @@ def test_linking_with_an_api_key(owner: TestClient, monkeypatch) -> None:  # typ
                       json={"provider": "fake", "credentials": {"api_key": "good"}}).status_code == 403  # fmt: skip
 
 
-def test_system_and_updates_are_admin_only(owner: TestClient, second: TestClient) -> None:
-    info = owner.get("/api/system").json()
+def test_system_and_updates_are_admin_only(second: TestClient, admin: TestClient) -> None:
+    info = admin.get("/api/system").json()
     assert "updates" in info and info["updates"]["can_install"] is False
     assert "updates" not in second.get("/api/system").json()
     assert second.post("/api/system/update").status_code == 403
-    assert owner.post("/api/system/update").status_code == 409  # nothing newer (check off)
+    assert admin.post("/api/system/update").status_code == 409  # nothing newer (check off)
 
 
 def test_an_oink_0_1_database_is_set_aside(tmp_path: Path) -> None:
@@ -376,6 +422,35 @@ def test_fixed_costs_follow_their_payments_and_flag_a_missing_one(owner: TestCli
     assert [m["id"] for m in owner.get("/api/fixed-costs/missing").json()] == [gym["id"]]
     owner.post(f"/api/fixed-costs/{gym['id']}/wait", json={"days": 7})
     assert owner.get("/api/fixed-costs/missing").json() == []
+
+
+def test_a_missing_fixed_cost_can_be_paid_in_cash_or_skipped(owner: TestClient) -> None:
+    from datetime import date, timedelta
+
+    today = date.today()
+    cash = owner.post(
+        "/api/accounts", json={"name": "Contanti", "kind": "cash", "balance": "210"}
+    ).json()
+    due = (today - timedelta(days=12)).isoformat()
+    gym = owner.post("/api/fixed-costs", json={"name": "Palestra", "amount": "50", "currency": "EUR",
+                                                "frequency": "monthly", "match": "palestra", "next_due": due}).json()  # fmt: skip
+    # paid in cash, and the cash balance already counts it
+    reply = owner.post(f"/api/fixed-costs/{gym['id']}/paid",
+                       json={"account_id": cash["id"], "day": due, "balance_updated": True})  # fmt: skip
+    assert reply.status_code == 200, reply.text
+    assert owner.get("/api/fixed-costs/missing").json() == []
+    history = owner.get(f"/api/fixed-costs/{gym['id']}/payments").json()
+    assert history["count"] == 1 and history["payments"][0]["elsewhere"]
+    assert history["next_due"] > due
+    accounts = {a["id"]: a for a in owner.get("/api/accounts").json()}
+    assert Decimal(accounts[cash["id"]]["balance"]) == Decimal("210")
+    # a month off: skipped, nothing spent
+    tv = owner.post("/api/fixed-costs", json={"name": "Disney+", "amount": "8.99", "currency": "EUR",
+                                               "frequency": "monthly", "match": "disney", "next_due": due}).json()  # fmt: skip
+    assert owner.post(f"/api/fixed-costs/{tv['id']}/skip").status_code == 200
+    assert owner.get("/api/fixed-costs/missing").json() == []
+    history = owner.get(f"/api/fixed-costs/{tv['id']}/payments").json()
+    assert history["skipped"] == [due] and history["count"] == 0
 
 
 def test_a_terminal_code_gets_its_real_name_and_fuel_is_known(owner: TestClient) -> None:

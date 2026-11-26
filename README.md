@@ -16,8 +16,11 @@ month. Any AI provider works, or none at all.
 
 ## What it does
 
-- **Everyone gets their own Oink.** The first account is the admin; invite others with a
-  one-time link. Each person's accounts, movements and reports are private.
+- **Everyone gets their own Oink.** People sign up by themselves (or get a one-time link).
+  Each person's accounts, movements and reports are private. The service admin (`admin`,
+  first password `oink`, to change at the first sign-in; or `OINK_ADMIN_USERNAME` /
+  `OINK_ADMIN_PASSWORD`) has no money in Oink: it manages people (unlock, rename,
+  temporary password, sign-up on or off) and the settings, and sees no one's finances.
 - **Every currency, crypto included.** Accounts can be in EUR, USD, GBP, JPY… or BTC, ETH,
   SOL and friends. Totals and reports are converted to your main currency with free
   exchange rates (ECB for fiat, CoinGecko for crypto).

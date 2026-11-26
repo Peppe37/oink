@@ -41,8 +41,14 @@ def caller(request: Request, db: Session = Depends(get_db)) -> Caller:
             user=user, browser=False, scopes=frozenset(token.scopes), token_name=token.name
         )
     session = session_user(db, request.cookies.get(COOKIE))
+    if session is not None and session.must_change_password and request.url.path not in (
+        "/api/me", "/api/auth/password", "/api/auth/logout",
+    ):  # fmt: skip
+        raise HTTPException(403, "password_change_required")
     if session is not None:
-        return Caller(user=session, browser=True, scopes=frozenset(SCOPES))
+        # the service admin manages people and settings: no finances, its own or anyone's
+        scopes = frozenset() if session.is_admin else frozenset(SCOPES)
+        return Caller(user=session, browser=True, scopes=scopes)
     raise HTTPException(401, "login_required")
 
 

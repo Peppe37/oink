@@ -1,12 +1,12 @@
 import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Markdown as ReactMarkdown } from "../ui/Markdown";
 import { Link } from "react-router-dom";
-import { api, type Overview, type Report, type User } from "../api";
+import { api, type Account, type Overview, type Report, type User } from "../api";
 import { Glass } from "../glass/Glass";
 import { useErrorText, useI18n } from "../i18n";
 import { AreaChart, Bars, Donut } from "../ui/charts";
-import { Empty, Money, PageHeader, Pig, rise, stagger } from "../ui/bits";
+import { Empty, Field, Money, PageHeader, Pig, Sheet, Spinner, rise, stagger } from "../ui/bits";
 import { CategoryTile, Icon } from "../ui/icons";
 import { categoryLabel } from "../ui/labels";
 
@@ -18,6 +18,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   useEffect(() => { api.untrackedTransfers().then(setMoved).catch(() => undefined); }, []);
   const [missing, setMissing] = useState<{ id: number; name: string; amount: string; currency: string; due: string }[]>([]);
   useEffect(() => { api.missingFixed().then(setMissing).catch(() => undefined); }, []);
+  const [paying, setPaying] = useState<{ id: number; name: string; amount: string; currency: string; due: string } | null>(null);
+  const drop = (id: number) => setMissing((x) => x.filter((y) => y.id !== id));
   const [plansFound, setPlansFound] = useState(0);
   useEffect(() => { api.planProposals().then((p) => setPlansFound(p.length)).catch(() => undefined); }, []);
   const [report, setReport] = useState<Report | null>(null);
@@ -72,8 +74,10 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
           <Glass className="banner" variant="tight">
             <span className="row" style={{ gap: 10 }}><Icon name="bills" /> {t("plan.missing", { name: m.name, amount: fmt.money(m.amount, m.currency), date: fmt.date(m.due, { day: "numeric", month: "long" }) })}</span>
             <span className="row" style={{ gap: 6 }}>
-              <button className="btn ghost small" onClick={async () => { await api.waitFixed(m.id); setMissing((x) => x.filter((y) => y.id !== m.id)); }}>{t("plan.wait")}</button>
-              <button className="btn ghost small" onClick={async () => { await api.stopFixed(m.id); setMissing((x) => x.filter((y) => y.id !== m.id)); }}>{t("plan.stop")}</button>
+              <button className="btn ghost small" title={t("plan.waitHint")} onClick={async () => { await api.waitFixed(m.id); drop(m.id); }}>{t("plan.wait")}</button>
+              <button className="btn ghost small" title={t("plan.paidHint")} onClick={() => setPaying(m)}>{t("plan.paid")}</button>
+              <button className="btn ghost small" title={t("plan.skipHint")} onClick={async () => { await api.skipFixed(m.id); drop(m.id); }}>{t("plan.skip")}</button>
+              <button className="btn ghost small" title={t("plan.stopHint")} onClick={async () => { await api.stopFixed(m.id); drop(m.id); }}>{t("plan.stop")}</button>
             </span>
           </Glass>
         </motion.div>
@@ -191,6 +195,9 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
           )}
         </div>
       )}
+    <Sheet open={!!paying} onClose={() => setPaying(null)} title={paying ? t("plan.paidTitle", { name: paying.name }) : ""}>
+        {paying && <PaidElsewhere cost={paying} onDone={() => { drop(paying.id); setPaying(null); }} />}
+      </Sheet>
     </motion.div>
   );
 }
@@ -204,5 +211,52 @@ function HomeSkeleton() {
         <div className="span-5 skeleton" style={{ height: 320 }} />
       </div>
     </div>
+  );
+}
+
+/* «Paid another way» (cash…): the payment goes on the account it came from, so it counts
+   as spent; when that account's balance already reflects it, the balance stays as it is. */
+function PaidElsewhere({ cost, onDone }: { cost: { id: number; name: string; amount: string; currency: string; due: string }; onDone: () => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [accountId, setAccountId] = useState<number | null>(null);
+  const [day, setDay] = useState(cost.due);
+  const [counted, setCounted] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.accounts().then((list) => {
+      const sorted = [...list].sort((a, b) => Number(b.kind === "cash") - Number(a.kind === "cash"));
+      setAccounts(sorted);
+      setAccountId(sorted[0]?.id ?? null);
+    }).catch((e) => setError(errorText(e)));
+  }, [errorText]);
+  const account = accounts?.find((a) => a.id === accountId);
+  const manual = account?.source !== "linked";
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (accountId == null) return;
+    setBusy(true);
+    try { await api.paidFixed(cost.id, { account_id: accountId, day, balance_updated: manual && counted }); onDone(); }
+    catch (err) { setError(errorText(err)); } finally { setBusy(false); }
+  };
+  if (!accounts) return <Spinner />;
+  return (
+    <form className="stack" onSubmit={submit}>
+      <p className="muted">{t("plan.paidIntro", { amount: fmt.money(cost.amount, cost.currency) })}</p>
+      <Field label={t("plan.paidFrom")}>
+        <select className="field" value={accountId ?? ""} onChange={(e) => setAccountId(Number(e.target.value))} required>
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.institution && a.institution !== a.name ? ` · ${a.institution}` : ""}</option>)}
+        </select>
+      </Field>
+      <Field label={t("plan.paidOn")}><input className="field" type="date" value={day} onChange={(e) => setDay(e.target.value)} required /></Field>
+      {manual && (
+        <label className="check"><input type="checkbox" checked={counted} onChange={(e) => setCounted(e.target.checked)} /> {t("plan.paidCounted")}</label>
+      )}
+      <p className="faint small-text">{manual && counted ? t("plan.paidCountedHint") : t("plan.paidBalanceHint")}</p>
+      {error && <div className="error">{error}</div>}
+      <button className="btn big-btn" disabled={busy || accountId == null}>{busy ? <Spinner /> : t("plan.paidConfirm")}</button>
+    </form>
   );
 }
