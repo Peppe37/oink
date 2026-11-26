@@ -159,3 +159,118 @@ def test_two_payments_of_the_same_amount_days_apart_stay_two(owner: TestClient) 
         )  # fmt: skip
     assert [t.description for t in result.added] == ["Festeesaporimurgia"]
     assert result.duplicates == 1
+
+
+def test_statement_exact_matches_are_reserved_before_near_matches(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account
+    from oink.services.ledger import NewMovement, add_movements
+
+    acc_id = owner.post("/api/accounts", json={"name": "Bank"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        add_movements(
+            db,
+            account,
+            [NewMovement(date(2026, 8, day), 10000, "Savings deposit") for day in (30, 31)],
+            "linked",
+        )
+        statement = [
+            NewMovement(date(2026, 8, day), 10000, "Savings deposit") for day in (27, 30, 31)
+        ]
+        result = add_movements(db, account, statement, "import")
+        assert [t.day for t in result.added] == [date(2026, 8, 27)]
+        assert result.duplicates == 2
+        again = add_movements(db, account, statement, "import")
+        assert not again.added and again.duplicates == 3
+
+
+def test_named_payees_are_reserved_before_amount_only_aliases(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account
+    from oink.services.ledger import NewMovement, add_movements, merge_duplicates
+
+    acc_id = owner.post("/api/accounts", json={"name": "Bank"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        add_movements(db, account, [NewMovement(date(2026, 8, 28), -1100, "Passoa")], "linked")
+        result = add_movements(
+            db,
+            account,
+            [
+                NewMovement(date(2026, 8, 26), -1100, "E Cig Shop"),
+                NewMovement(date(2026, 8, 30), -1100, "Passoa"),
+            ],
+            "import",
+        )
+        assert [t.description for t in result.added] == ["E Cig Shop"]
+        assert result.duplicates == 1
+        assert merge_duplicates(db, acc_id) == []
+
+
+def test_reimport_restores_a_missing_identical_occurrence(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account
+    from oink.services.ledger import NewMovement, add_movements
+
+    acc_id = owner.post("/api/accounts", json={"name": "Bank"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        row = NewMovement(date(2026, 11, 10), -170, "Local railway")
+        first = add_movements(db, account, [row, row], "import")
+        db.delete(first.added[0])  # only occurrence 1 survives an old, incorrect repair
+        db.commit()
+        repaired = add_movements(db, account, [row, row], "import")
+        assert len(repaired.added) == 1 and repaired.duplicates == 1
+        assert not add_movements(db, account, [row, row], "import").added
+
+
+def test_repeated_dedupe_never_goes_below_the_statement_payment_count(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account, Document
+    from oink.services.ledger import NewMovement, add_movements, merge_duplicates
+
+    acc_id = owner.post("/api/accounts", json={"name": "Bank"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        doc = Document(
+            user_id=account.user_id,
+            kind="statement",
+            filename="statement.pdf",
+            stored="test.pdf",
+            sha256="railway",
+            account_id=acc_id,
+            review={
+                "rows": [
+                    ["2026-11-10", "-1.70", "Local railway", ""],
+                    ["2026-11-10", "-1.70", "Local railway", ""],
+                ]
+            },
+        )
+        db.add(doc)
+        db.commit()
+        # An old importer left one duplicate, but two genuine payments must survive.
+        add_movements(
+            db, account, [NewMovement(date(2026, 11, 8), -170, "Local railway")], "linked"
+        )
+        for n in range(2):
+            db.add(
+                Transaction(
+                    user_id=account.user_id,
+                    account_id=acc_id,
+                    day=date(2026, 11, 10),
+                    amount=-170,
+                    description="Local railway",
+                    source="import",
+                    fingerprint=f"railway-{n}",
+                    document_id=doc.id,
+                )
+            )
+        db.commit()
+        assert len(merge_duplicates(db, acc_id, apply=True)) == 1
+        assert merge_duplicates(db, acc_id, apply=True) == []
+        assert db.query(Transaction).filter(Transaction.account_id == acc_id).count() == 2

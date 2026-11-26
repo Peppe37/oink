@@ -12,7 +12,8 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from oink.core.db import Account, Rule, Transaction
+from oink.core.db import Account, Document, Rule, Transaction
+from oink.core.money import to_minor
 
 #: Built-in categories: stable ids, translated by the web app (each has its own icon).
 #: Users may type any other name; it is shown as written.
@@ -47,14 +48,17 @@ INTERNAL = {"transfers", "savings", "investments", "crypto"}
 #: the bank link and the statement of the same payment may differ by this many days
 #: (booking date against the day of the payment, weekends, card payments abroad)
 NEAR_DAYS = 5
-#: up to this many days apart the same amount from the other source is the same payment;
-#: further (up to NEAR_DAYS) only when the payee's name has a word in common — two different
-#: payments of the same amount a few days apart are common
+#: Last-resort tolerance for bank merchant aliases, after every fingerprint, exact date
+#: and compatible payee has its counterpart reserved across the complete incoming batch.
 BLIND_DAYS = 3
 
 
 def _words(text: str) -> set[str]:
-    return {w for w in normalise(text).split() if len(w) >= 4 and not any(c.isdigit() for c in w)}
+    return {
+        w
+        for w in re.findall(r"[^\W\d_]+", normalise(text))
+        if len(w) >= 4 and w not in {"payment", "pagamento", "favore", "parte", "from", "transfer"}
+    }
 
 
 def similar(a: str, b: str) -> bool:
@@ -193,18 +197,32 @@ def inherit_categories(db: Session, user_id: int) -> int:
     return done
 
 
+def _compatible(a: str, b: str) -> bool:
+    """Nearby dates need a shared payee, or a bank copy with no useful wording."""
+
+    def unnamed(text: str) -> bool:
+        return not text.strip("—- ") or looks_like_terminal(text.strip())
+
+    return (
+        (bool(a.strip()) and normalise(a) == normalise(b))
+        or similar(a, b)
+        or unnamed(a)
+        or unnamed(b)
+    )
+
+
 def _take_near(
-    other: dict[tuple[date, int], list[Transaction]], m: NewMovement
-) -> tuple[date, int] | None:
+    other: dict[tuple[date, int], list[Transaction]], m: NewMovement, *, aliases: bool = False
+) -> Transaction | None:
     """The other source's copy of this payment a few days away, nearest first: used up so
-    it can't match twice. Beyond BLIND_DAYS the payee must look alike."""
+    it can't match twice. Amount-only aliases are considered only after stronger matches."""
     wording = f"{m.description} {m.counterparty}"
     for d in range(1, NEAR_DAYS + 1):
         for k in ((m.day - timedelta(days=d), m.amount), (m.day + timedelta(days=d), m.amount)):
             for tx in other.get(k, []):
-                if d <= BLIND_DAYS or similar(wording, _wording(tx)):
+                if _compatible(wording, _wording(tx)) or (aliases and d <= BLIND_DAYS):
                     other[k].remove(tx)
-                    return k
+                    return tx
     return None
 
 
@@ -226,40 +244,81 @@ def add_movements(
         movements = list(reversed(movements))  # newest first (bank APIs): store oldest first
     movements = sorted(movements, key=lambda m: m.day)  # stable: keeps the order within a day
     rules = list(db.scalars(select(Rule).where(Rule.user_id == account.user_id)))
-    seen = set(
-        db.scalars(select(Transaction.fingerprint).where(Transaction.account_id == account.id))
-    )
+    existing = list(db.scalars(select(Transaction).where(Transaction.account_id == account.id)))
+    by_fingerprint = {t.fingerprint: t for t in existing}
+    seen = set(by_fingerprint)
     counts: Counter[tuple[date, int, str]] = Counter()
-    same: Counter[tuple[date, int]] = Counter()
-    other: dict[tuple[date, int], list[Transaction]] = {}  # the other source's, still free
-    blank: dict[tuple[date, int], list[Transaction]] = {}  # existing ones without wording
-    if movements:
-        start = min(m.day for m in movements) - timedelta(days=NEAR_DAYS)
-        end = max(m.day for m in movements) + timedelta(days=NEAR_DAYS)
-        for tx in db.scalars(
-            select(Transaction).where(
-                Transaction.account_id == account.id,
-                Transaction.source != "pending",  # provisional: the booked copy replaces it
-                Transaction.day >= start,
-                Transaction.day <= end,
-            )
-        ):
-            same[(tx.day, tx.amount)] += 1
-            if tx.source != source:
-                other.setdefault((tx.day, tx.amount), []).append(tx)
-            if (not tx.description.strip("—- ") and not tx.counterparty) or (
-                source == "import"
-                and tx.source == "linked"
-                and looks_like_terminal(tx.counterparty or tx.description)
-            ):
-                blank.setdefault((tx.day, tx.amount), []).append(tx)
+    batch: list[tuple[NewMovement, str]] = []
+    for m in movements:
+        key = (m.day, m.amount, normalise(m.description))
+        occurrence = counts[key]
+        counts[key] += 1
+        batch.append((m, fingerprint(m.day, m.amount, m.description, occurrence, m.external_id)))
 
-    def enrich(at: tuple[date, int], m: NewMovement) -> None:
+    # Reserve fingerprints across the whole batch before date/amount matches. Otherwise
+    # occurrence 0 can consume occurrence 1, making a missing identical payment invisible.
+    matched: dict[int, Transaction] = {}
+    used: set[int] = set()
+    for i, (_, fp) in enumerate(batch):
+        if fp in by_fingerprint:
+            matched[i] = by_fingerprint[fp]
+            used.add(matched[i].id)
+    same: dict[tuple[date, int], list[Transaction]] = {}
+    for tx in existing:
+        if tx.id not in used and tx.source != "pending" and tx.parent_id is None:
+            same.setdefault((tx.day, tx.amount), []).append(tx)
+    # Reserve every exact date before considering nearby dates: an earlier row must not
+    # steal a later row's exact counterpart (e.g. several distinct 100 EUR deposits).
+    for i, (m, _) in enumerate(batch):
+        if i in matched:
+            continue
+        candidates = same.get((m.day, m.amount), [])
+        compatible = [
+            t for t in candidates if _compatible(f"{m.description} {m.counterparty}", _wording(t))
+        ]
+        if compatible:
+            candidates.sort(
+                key=lambda t: not similar(f"{m.description} {m.counterparty}", _wording(t))
+            )
+            matched[i] = compatible[0]
+            candidates.remove(matched[i])
+            used.add(matched[i].id)
+    other: dict[tuple[date, int], list[Transaction]] = {}
+    for tx in existing:
+        if tx.id not in used and tx.source not in (source, "pending") and tx.parent_id is None:
+            other.setdefault((tx.day, tx.amount), []).append(tx)
+    for i, (m, _) in enumerate(batch):
+        if i not in matched and (near := _take_near(other, m)) is not None:
+            matched[i] = near
+
+    used.update(t.id for t in matched.values())
+    for i, (m, _) in enumerate(batch):
+        if i not in matched:
+            candidates = same.get((m.day, m.amount), [])
+            available = [t for t in candidates if t.id not in used]
+            if available:
+                matched[i] = available[0]
+                used.add(available[0].id)
+
+    # Providers often use another merchant name (e.g. a payment processor). Keep the
+    # existing short alias tolerance, but never let it take a stronger match's payment.
+    other = {}
+    for tx in existing:
+        if tx.id not in used and tx.source not in (source, "pending") and tx.parent_id is None:
+            other.setdefault((tx.day, tx.amount), []).append(tx)
+    for i, (m, _) in enumerate(batch):
+        if i not in matched and (near := _take_near(other, m, aliases=True)) is not None:
+            matched[i] = near
+
+    def enrich(tx: Transaction, m: NewMovement) -> None:
         """A duplicate with words where the existing copy has none (Trade Republic through
         the bank link): the existing movement takes the statement's wording."""
-        found = blank.get(at)
-        if found and m.description.strip("—- "):
-            tx = found.pop()
+        blank = (not tx.description.strip("—- ") and not tx.counterparty) or (
+            source == "import"
+            and tx.source == "linked"
+            and looks_like_terminal(tx.counterparty or tx.description)
+        )
+        if blank and m.description.strip("—- "):
             tx.description, tx.counterparty = (
                 m.description.strip()[:500],
                 m.counterparty.strip()[:200],
@@ -267,23 +326,10 @@ def add_movements(
 
     known = _payee_categories(db, account.user_id)
     added, duplicates = [], 0
-    for m in movements:
-        key = (m.day, m.amount, normalise(m.description))
-        counts[key] += 1
-        fp = fingerprint(m.day, m.amount, m.description, counts[key] - 1, m.external_id)
-        exact = (m.day, m.amount)
-        if fp in seen or same[exact] > 0:
-            if same[exact] > 0:
-                same[exact] -= 1
-                if other.get(exact):
-                    other[exact].pop()
-                enrich(exact, m)
-            duplicates += 1
-            continue
-        near = _take_near(other, m)
-        if near is not None:
-            same[near] = max(0, same[near] - 1)
-            enrich(near, m)
+    for i, (m, fp) in enumerate(batch):
+        if i in matched or fp in seen:
+            if i in matched:
+                enrich(matched[i], m)
             duplicates += 1
             continue
         seen.add(fp)
@@ -385,9 +431,30 @@ def _edited(t: Transaction, db: Session) -> bool:
     )
 
 
+def _statement_floors(db: Session, account: Account) -> list[tuple[date, date, Counter[int]]]:
+    """Each statement is evidence of a minimum number of payments per exact amount."""
+    floors = []
+    for doc in db.scalars(
+        select(Document).where(
+            Document.user_id == account.user_id,
+            Document.account_id == account.id,
+            Document.kind == "statement",
+        )
+    ):
+        rows = (doc.review or {}).get("rows", [])
+        if not rows:
+            continue
+        days = [date.fromisoformat(row[0]) for row in rows]
+        amounts = Counter(to_minor(row[1], account.currency) for row in rows)
+        floors.append(
+            (min(days) - timedelta(days=NEAR_DAYS), max(days) + timedelta(days=NEAR_DAYS), amounts)
+        )
+    return floors
+
+
 def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> list[Merged]:
     """The same payment twice in one account: once from the statement, once from the bank
-    link, a few days apart (BLIND_DAYS, or NEAR_DAYS when the payee looks alike). Same
+    link, up to NEAR_DAYS apart when the payee looks alike or one copy is unnamed. Same
     amount, one-to-one, nearest day first. The statement's copy goes, unless only that copy carries
     something the person did (then the other goes); when both carry something, both stay.
     Returns what was (or, without `apply`, would be) merged."""
@@ -412,9 +479,14 @@ def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> li
         for a in imports:
             for b in links:
                 gap = abs((a.day - b.day).days)
-                if gap <= BLIND_DAYS or (gap <= NEAR_DAYS and similar(_wording(a), _wording(b))):
+                if gap <= NEAR_DAYS and _compatible(_wording(a), _wording(b)):
                     pairs.append((gap, a.id, b.id, a, b))
     pairs.sort(key=lambda p: p[:3])
+    account = db.get(Account, account_id)
+    floors = _statement_floors(db, account) if account is not None else []
+    remaining = [
+        Counter(t.amount for t in txs if start <= t.day <= end) for start, end, _ in floors
+    ]
     used: set[int] = set()
     done: list[Merged] = []
     for _, _, _, imp, link in pairs:
@@ -426,6 +498,14 @@ def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> li
             drop, keep = link, imp
         elif _edited(imp, db) and _edited(link, db):
             continue  # both carry something: the person decides
+        if any(
+            start <= drop.day <= end and remaining[i][drop.amount] <= counts[drop.amount]
+            for i, (start, end, counts) in enumerate(floors)
+        ):
+            continue  # a repeated repair must never erase a genuine statement occurrence
+        for i, (start, end, _) in enumerate(floors):
+            if start <= drop.day <= end:
+                remaining[i][drop.amount] -= 1
         done.append(Merged(keep, drop))
         if not apply:
             continue

@@ -155,3 +155,27 @@ def test_the_api_shows_the_pair_and_frees_it_on_correction(owner: TestClient) ->
     owner.patch(f"/api/transactions/{inc['id']}", json={"category": "income", "learn": False})
     listed = {t["id"]: t for t in owner.get("/api/transactions").json()}
     assert listed[out["id"]]["transfer_id"] is None and listed[out["id"]]["category"] == ""
+
+
+def test_equal_balanced_own_transfers_are_excluded_without_guessing_pairs(db: Database) -> None:
+    uid, (a, b) = _setup(db, ("Revolut", "Revolut", "EUR"), ("Intesa", "Intesa", "EUR"))
+    # Two same-day own transfers are unambiguous as a group, but their individual
+    # reference numbers cannot be recovered from a truncated destination bank feed.
+    _add(
+        db,
+        a,
+        NewMovement(date(2026, 11, 3), -1000, "Bonifico verso Intesa"),
+        NewMovement(date(2026, 11, 3), -1000, "Bonifico verso Intesa"),
+    )
+    _add(
+        db,
+        b,
+        NewMovement(date(2026, 11, 3), 1000, "Accredito bonifico A"),
+        NewMovement(date(2026, 11, 3), 1000, "Accredito bonifico B"),
+    )
+    txs = _txs(db)
+    assert len(txs) == 4
+    assert all(t.category == "transfers" for t in txs)
+    with db.sessions() as s:
+        month = compare(Book.of(s, s.get(User, uid)), "2026-11")["current"]
+    assert month["income"] == 0 and month["spending"] == 0

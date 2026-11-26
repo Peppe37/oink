@@ -102,14 +102,14 @@ export function Insights({ ai, notify }: { ai: boolean; notify: (s: string) => v
             </details>
           ))}
           {ai && months.some((m) => !m.report && m.month !== writing) && (
-            <Glass className="card" variant="tight">
-              <h4 className="section-label">{t("reports.missing")}</h4>
-              <div className="row wrap" style={{ gap: 8 }}>
+            <details className="glass report-past">
+              <summary>{t("reports.missing")} <span className="faint">{months.filter((m) => !m.report && m.month !== writing).length}</span></summary>
+              <div className="row wrap" style={{ gap: 8, marginTop: 12 }}>
                 {months.filter((m) => !m.report && m.month !== writing).map((m) => (
                   <button key={m.month} className="btn ghost small cap" disabled={busy} onClick={() => generate(m.month)}><Icon name="sparkle" size={14} /> {fmt.month(m.month)}</button>
                 ))}
               </div>
-            </Glass>
+            </details>
           )}
         </motion.div>
       )}

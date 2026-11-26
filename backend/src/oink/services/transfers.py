@@ -210,6 +210,31 @@ def match_transfers(db: Session, user: User, since: date | None = None) -> int:
         best = min(abs((i.day - out.day).days) for i in worded)
         nearest = [i for i in worded if abs((i.day - out.day).days) == best]
         if len(nearest) != 1:
+            # Equal own transfers on the same day can be certain as a balanced group,
+            # while their individual references remain unknown. Exclude the group
+            # without inventing one-to-one links; unequal or cross-account groups wait.
+            same_outs = [
+                o
+                for o in outs
+                if o.transfer_id is None
+                and o.account_id == out.account_id
+                and o.day == out.day
+                and o.amount == out.amount
+                and o.currency == out.currency
+            ]
+            if (
+                len(nearest) == len(same_outs)
+                and len({i.account_id for i in nearest}) == 1
+                and all(i.day == out.day and i.currency == out.currency for i in nearest)
+                and all(
+                    owner.institution(o)
+                    or any(n in _text(o) for n in owner.names_of(nearest[0].account_id))
+                    for o in same_outs
+                )
+            ):
+                for leg in [*same_outs, *nearest]:
+                    _mark(leg, None)
+                taken.update(i.id for i in nearest)
             continue  # two equally good partners: leave it to the person
         partner = nearest[0]
         taken.add(partner.id)
