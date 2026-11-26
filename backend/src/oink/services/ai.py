@@ -16,6 +16,16 @@ from typing import Any
 from oink.core.config import Settings
 from oink.services.ledger import CATEGORIES
 
+#: How to read the investment figures, whoever the broker and whatever the plan looks like.
+DATA_RULES = (
+    "Reading the investment data: an accumulation plan (PAC) is a recurring order, a portfolio is "
+    "what the executed purchases built up; the monthly amount of a plan is split among its "
+    "securities, which can change over time, and a plan item with a future next_execution has "
+    "bought nothing yet, so it is not a holding. Money invested is never negative: a negative "
+    "gain is an unrealised loss on money still invested, never «negative money invested». "
+    "Positions whose cost is unknown and purchases without an identified security are gaps in "
+    "the data: name them as gaps and never turn them into figures or holdings."
+)
 LANG = {"en": "English", "it": "Italian", "de": "German", "fr": "French", "es": "Spanish"}
 
 
@@ -173,7 +183,8 @@ class AI:
             "4) risks to fix first (debts, no emergency fund, concentration, crypto share); "
             "5) three to five concrete, measurable steps. If the risk questionnaire is missing, "
             "say so and keep advice general. Never promise returns; mention that simulations "
-            "are not forecasts. No single-stock picks. Be warm, direct, no jargon."
+            "are not forecasts. No single-stock picks. Be warm, direct, no jargon. "
+            + DATA_RULES
             + (f" The user especially asks about: {focus}" if focus else ""),
             json.dumps(picture, ensure_ascii=False, default=str),
         )
@@ -182,7 +193,7 @@ class AI:
         return await self.complete(
             f"Answer in {LANG.get(language, 'English')} a question about the user's finances "
             "using ONLY the data provided. If the data are not enough, say so. Short and "
-            "concrete. No investment advice on single securities.",
+            "concrete. No investment advice on single securities. " + DATA_RULES,
             f"Data:\n{json.dumps(facts, ensure_ascii=False, default=str)}\n\nQuestion: {question}",
         )
 
