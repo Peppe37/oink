@@ -29,7 +29,7 @@ function Shell() {
 
   return (
     <I18nProvider lang={lang}>
-      <Aurora />
+      <Aurora prefs={status?.user?.prefs} />
       {offline && !status ? (
         <div className="center"><span className="muted">Oink…</span></div>
       ) : !status ? null : invite && !status.user ? (

@@ -122,7 +122,11 @@ def month_summary(book: Book, month: str) -> dict[str, Any]:
         "income": _r(inn),
         "spending": _r(out),
         "net": _r(inn - out),
-        "saving_rate": round((inn - out) / inn, 3) if inn else None,
+        # money put aside is never below zero: a month that cost more than it brought in has
+        # «overspent» (paid from earlier savings), not a negative saving
+        "saved": _r(max(0.0, inn - out)),
+        "overspent": _r(max(0.0, out - inn)),
+        "saving_rate": round(max(0.0, inn - out) / inn, 3) if inn else None,
         "count": len(rows),
         "by_category": {k: _r(v) for k, v in sorted(by_category.items(), key=lambda kv: -kv[1])},
         "top_merchants": {

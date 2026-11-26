@@ -4,7 +4,9 @@ Every data route is scoped to the calling user. OpenAPI docs at /api/docs."""
 from __future__ import annotations
 
 import secrets
+import time
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import (
@@ -18,7 +20,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -87,7 +89,7 @@ from oink.core.security import (
 )
 from oink.providers import PROVIDERS, ProviderError
 from oink.providers.enablebanking import COUNTRIES, EnableBanking
-from oink.services import fx, updates
+from oink.services import fx, search, updates
 from oink.services import reports as rep
 from oink.services.ai import AI, AIError
 from oink.services.connections import (
@@ -305,14 +307,106 @@ def me(who: Caller = Depends(caller)) -> UserOut:
     return user_out(who.user)
 
 
+#: what a person may choose, and the values each choice takes
+PREFS: dict[str, Any] = {
+    "home_total": {"net_worth", "accounts"},  # the big figure on the dashboard
+    "background": {"aurora", "image"},
+    "blur": bool,  # blur the background picture
+    "bg_version": int,  # changes when a new picture is uploaded (so browsers reload it)
+}
+BACKGROUND_TYPES = {b"\x89PNG\r\n\x1a\n": "png", b"\xff\xd8\xff": "jpg", b"RIFF": "webp"}
+BACKGROUND_MAX = 6 * 1024 * 1024
+
+
+def _background_dir(request: Request) -> Path:
+    folder = settings_of(request).data_dir / "backgrounds"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def _background_file(request: Request, user_id: int) -> Path | None:
+    for ext in ("png", "jpg", "webp"):
+        path = _background_dir(request) / f"{user_id}.{ext}"
+        if path.is_file():
+            return path
+    return None
+
+
+@api.post("/me/background")
+async def set_background(
+    request: Request,
+    file: UploadFile = File(...),
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    """The picture behind the pages (PNG, JPEG or WebP, up to 6 MB)."""
+    raw = await file.read(BACKGROUND_MAX + 1)
+    if len(raw) > BACKGROUND_MAX:
+        raise HTTPException(413, "file_too_big")
+    ext = next((e for magic, e in BACKGROUND_TYPES.items() if raw.startswith(magic)), "")
+    if ext == "webp" and raw[8:12] != b"WEBP":
+        ext = ""
+    if not ext:
+        raise HTTPException(422, "format_unsupported")
+    for old in ("png", "jpg", "webp"):
+        (_background_dir(request) / f"{who.user_id}.{old}").unlink(missing_ok=True)
+    (_background_dir(request) / f"{who.user_id}.{ext}").write_bytes(raw)
+    user = db.get(User, who.user_id)
+    assert user is not None
+    user.prefs = {**(user.prefs or {}), "background": "image", "bg_version": int(time.time())}
+    db.commit()
+    return user_out(user)
+
+
+@api.get("/me/background")
+def get_background(request: Request, who: Caller = Depends(browser_only)) -> FileResponse:
+    path = _background_file(request, who.user_id)
+    if path is None:
+        raise HTTPException(404, "background_unknown")
+    media = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}[path.suffix[1:]]
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=86400"})
+
+
+@api.delete("/me/background")
+def delete_background(
+    request: Request, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
+) -> UserOut:
+    path = _background_file(request, who.user_id)
+    if path is not None:
+        path.unlink(missing_ok=True)
+    user = db.get(User, who.user_id)
+    assert user is not None
+    user.prefs = {**(user.prefs or {}), "background": "aurora"}
+    db.commit()
+    return user_out(user)
+
+
 @api.patch("/me", response_model=UserOut)
 def update_me(
-    body: ProfilePatch, who: Caller = Depends(browser_only), db: Session = Depends(get_db)
+    body: ProfilePatch,
+    request: Request,
+    who: Caller = Depends(browser_only),
+    db: Session = Depends(get_db),
 ) -> UserOut:
     user = db.get(User, who.user_id)
     assert user is not None
     if body.name is not None:
         user.name = body.name.strip() or user.username
+    if body.prefs is not None:
+        chosen = dict(user.prefs or {})
+        for key, value in body.prefs.items():
+            allowed = PREFS.get(key)
+            if allowed is None:
+                raise HTTPException(422, "pref_unknown")
+            good = isinstance(value, allowed) if isinstance(allowed, type) else value in allowed
+            if isinstance(allowed, type) and allowed is int and isinstance(value, bool):
+                good = False
+            if not good:
+                raise HTTPException(422, "pref_invalid")
+            chosen[key] = value
+        if chosen.get("background") == "image" and _background_file(request, user.id) is None:
+            raise HTTPException(422, "background_missing")
+        user.prefs = chosen
     if body.language is not None:
         user.language = body.language
     if body.base_currency is not None:
@@ -605,8 +699,18 @@ def running_balances(db: Session, user: User) -> tuple[dict[int, int], dict[int,
     return after, total_after
 
 
+@api.get("/transactions/understand")
+def understand_search(
+    q: str = Query(min_length=1, max_length=200),
+    who: Caller = Depends(require("transactions:read")),
+) -> dict[str, Any]:
+    """How a search is read: each piece (an amount, a date, a category, a word)."""
+    return {"chips": search.understand(q).chips()}
+
+
 @api.get("/transactions", response_model=list[TransactionOut])
-def transactions(
+async def transactions(
+    request: Request,
     account_id: int | None = None,
     month: str | None = Query(default=None, pattern=MONTH),
     category: str | None = None,
@@ -615,7 +719,7 @@ def transactions(
     date_from: date | None = None,
     date_to: date | None = None,
     sort: Literal["date", "amount_desc", "amount_asc"] = "date",
-    q: str | None = Query(default=None, max_length=100),
+    q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     who: Caller = Depends(require("transactions:read")),
@@ -657,16 +761,18 @@ def transactions(
         query = query.where(Transaction.amount > 0)
     elif direction == "out":
         query = query.where(Transaction.amount < 0)
-    if q:
-        like = f"%{q}%"
-        query = query.where(
-            or_(
-                Transaction.description.ilike(like),
-                Transaction.counterparty.ilike(like),
-                Transaction.note.ilike(like),
-            )
-        )
-    rows = list(db.scalars(query.limit(limit).offset(offset)))
+    if q and q.strip():
+        # searched the way a person types (services/search.py); the other filters apply first
+        parsed = search.understand(q)
+        everything = list(db.scalars(query))
+        rows = [t for t in everything if search.matches(search.row_of(t), parsed)]
+        if not rows and parsed.pieces:  # nothing: the AI may read the sentence differently
+            smart = await search.interpret_with_ai(ai_of(request), q, date.today())
+            if smart is not None:
+                rows = [t for t in everything if search.matches(search.row_of(t), smart)]
+        rows = rows[offset : offset + limit]
+    else:
+        rows = list(db.scalars(query.limit(limit).offset(offset)))
     after, total_after = running_balances(db, who.user)
     partners = {
         tx_id: acc_id

@@ -22,6 +22,7 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
   const drop = (id: number) => setMissing((x) => x.filter((y) => y.id !== id));
   const [plansFound, setPlansFound] = useState(0);
   useEffect(() => { api.planProposals().then((p) => setPlansFound(p.length)).catch(() => undefined); }, []);
+  const wealth = user.prefs?.home_total === "net_worth";
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
@@ -108,9 +109,11 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
         <div className="grid">
           <motion.div variants={rise} className="span-7">
             <Glass refract strength={42} className="card hero">
-              <h3>{t("home.accountsBalance")}</h3>
-              <div className="big"><Money value={accountsTotal} currency={cur} /></div>
-              <p className="muted small-text"><Link to="/invest">{t("home.investmentsSeparate", { amount: fmt.money(data.net_worth.investments ?? 0, cur) })}</Link></p>
+              <h3>{wealth ? t("home.netWorth") : t("home.accountsBalance")}</h3>
+              <div className="big"><Money value={wealth ? accountsTotal + (data.net_worth.investments ?? 0) : accountsTotal} currency={cur} /></div>
+              <p className="muted small-text"><Link to="/invest">{wealth
+                ? t("home.investmentsIncluded", { amount: fmt.money(data.net_worth.investments ?? 0, cur) })
+                : t("home.investmentsSeparate", { amount: fmt.money(data.net_worth.investments ?? 0, cur) })}</Link></p>
               {data.net_worth.unvalued_accounts.length > 0 && <p className="note">{t("home.unknownBalances", { names: data.net_worth.unvalued_accounts.join(", ") })}</p>}
               {data.net_worth.unvalued_investments.length > 0 && <p className="note">{t("home.unknownInvestments", { names: data.net_worth.unvalued_investments.join(", ") })}</p>}
               <div className={`num trend ${trend >= 0 ? "up" : "down"}`}>
@@ -118,7 +121,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
                 {t("home.trend", { amount: fmt.money(Math.abs(trend), cur) })}
               </div>
               {data.net_worth.missing_rates.length > 0 && <p className="faint small-text">{t("home.missingRates", { codes: data.net_worth.missing_rates.join(", ") })}</p>}
-              <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1)} currency={cur} label={t("home.accountsBalance")} />
+              <AreaChart data={data.balance.filter((_, i, a) => i % 3 === 0 || i === a.length - 1).map((p) => wealth ? { ...p, value: p.value + (data.net_worth.investments ?? 0) } : p)} currency={cur} label={wealth ? t("home.netWorth") : t("home.accountsBalance")} />
+              {wealth && <p className="faint small-text">{t("home.chartInvestmentsToday")}</p>}
             </Glass>
           </motion.div>
 
@@ -137,7 +141,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
               <div className="two stats">
                 <div className="stat"><span className="muted">{t("home.earned")}</span><span className="num up strong"><Money value={month.income} currency={cur} compact /></span>
                   {month.salary && month.salary.count !== 1 && <span className="faint small-text">{month.salary.count === 0 ? t("home.noSalary") : t("home.salaries", { count: month.salary.count })}</span>}</div>
-                <div className="stat"><span className="muted">{t("home.saved")}</span><span className={`num strong ${month.net >= 0 ? "up" : "down"}`}><Money value={month.net} currency={cur} compact /></span></div>
+                <div className="stat"><span className="muted">{t("home.saved")}</span><span className="num strong up"><Money value={month.saved ?? Math.max(0, month.net)} currency={cur} compact /></span>
+                  {(month.overspent ?? Math.max(0, -month.net)) > 0 && <span className="faint small-text down">{t("home.overspent", { amount: fmt.money(month.overspent ?? -month.net, cur, { compact: true }) })}</span>}</div>
               </div>
               {movers.length > 0 && (
                 <div className="movers">

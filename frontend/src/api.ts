@@ -2,7 +2,8 @@
    decimal strings in their own currency; reports are numbers in the user's main currency.
    Errors carry a short code (translated with useErrorText). */
 
-export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string; sso: boolean; must_change_password?: boolean; locked?: boolean };
+export type User = { id: number; username: string; name: string; is_admin: boolean; language: string; base_currency: string; disabled: boolean; created: string; sso: boolean; must_change_password?: boolean; locked?: boolean; prefs?: Prefs };
+export type Prefs = { home_total?: "net_worth" | "accounts"; background?: "aurora" | "image"; blur?: boolean; bg_version?: number };
 export type Status = { configured: boolean; user: User | null; ai: boolean; ai_reads_text: boolean; banking: boolean; version: string; sso: string | null; password_login: boolean; signup?: boolean };
 export type Account = {
   id: number; name: string; kind: string; institution: string; iban: string; currency: string; source: string;
@@ -16,6 +17,7 @@ export type Recurring = { name: string; monthly: number; last: number; increased
 export type MonthSummary = {
   month: string; income: number; spending: number; net: number; saving_rate: number | null;
   salary?: { count: number; amount: number; days: string[] };
+  saved?: number; overspent?: number;
   by_category: Record<string, number>; top_merchants: Record<string, number>; uncategorised: number; count: number;
 };
 export type Overview = {
@@ -132,6 +134,10 @@ export const api = {
   logout: () => call("/auth/logout", { method: "POST" }),
   password: (current: string, next: string) => call("/auth/password", { method: "POST", body: json({ current, new: next }) }),
   updateMe: (body: Partial<Pick<User, "name" | "language" | "base_currency">>) => call<User>("/me", { method: "PATCH", body: json(body) }),
+  setPrefs: (prefs: Prefs) => call<User>("/me", { method: "PATCH", body: json({ prefs }) }),
+  uploadBackground: (file: File) => { const f = new FormData(); f.append("file", file); return call<User>("/me/background", { method: "POST", body: f }); },
+  deleteBackground: () => call<User>("/me/background", { method: "DELETE" }),
+  understandSearch: (q: string) => call<{ chips: { kind: string; label: string }[] }>(`/transactions/understand?${query({ q })}`),
 
   overview: () => call<Overview>("/reports/overview"),
   currencies: () => call<{ fiat: string[]; crypto: string[] }>("/currencies"),

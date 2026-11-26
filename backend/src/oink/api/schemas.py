@@ -5,7 +5,7 @@ currency. Errors carry a short code in `detail` (translated by the web app)."""
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,6 +33,7 @@ class UserOut(Out):
     sso: bool = False
     must_change_password: bool = False
     locked: bool = False
+    prefs: dict[str, Any] = Field(default_factory=dict)
 
 
 class UserIn(BaseModel):
@@ -53,6 +54,7 @@ class TempPassword(BaseModel):
 
 
 class ProfilePatch(BaseModel):
+    prefs: dict[str, Any] | None = None
     name: str | None = Field(default=None, max_length=80)
     language: Language | None = None
     base_currency: str | None = Field(default=None, min_length=2, max_length=10)

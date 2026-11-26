@@ -298,3 +298,39 @@ def test_a_month_says_how_many_salaries_landed_in_it(owner: TestClient) -> None:
         from datetime import date
 
         assert rep.typical_salary(book, date(2026, 7, 31)) == round((1531 + 1564 + 1574) / 3, 2)
+
+
+def test_saved_is_never_below_zero_and_the_overspending_is_shown_apart(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Conto", "balance": "0"}).json()["id"]
+    _add(owner, acc, "2026-10-01", "1000", "Pagamento da ACME SRL", category="salary")
+    _add(owner, acc, "2026-10-05", "-400", "Affitto")
+    _add(owner, acc, "2026-11-02", "300", "Pagamento da ACME SRL", category="salary")
+    _add(owner, acc, "2026-11-05", "-900", "Vacanza")
+    good = owner.get("/api/reports/summary", params={"month": "2026-10"}).json()["current"]
+    assert good["saved"] == 600 and good["overspent"] == 0
+    bad = owner.get("/api/reports/summary", params={"month": "2026-11"}).json()["current"]
+    assert bad["saved"] == 0 and bad["overspent"] == 600 and bad["net"] == -600
+    assert bad["saving_rate"] == 0
+
+
+def test_preferences_and_the_background_picture(owner: TestClient, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    me = owner.get("/api/me").json()
+    assert me["prefs"] == {}
+    assert owner.patch("/api/me", json={"prefs": {"home_total": "net_worth", "blur": True}}).json()["prefs"] == {
+        "home_total": "net_worth", "blur": True,
+    }  # fmt: skip
+    for bad in ({"home_total": "cash"}, {"blur": "yes"}, {"nope": 1}, {"background": "image"}):
+        assert owner.patch("/api/me", json={"prefs": bad}).status_code == 422, bad
+    assert owner.get("/api/me/background").status_code == 404
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 100
+    assert (
+        owner.post("/api/me/background", files={"file": ("a.png", b"not an image")}).status_code
+        == 422
+    )
+    done = owner.post("/api/me/background", files={"file": ("a.png", png)}).json()
+    assert done["prefs"]["background"] == "image" and done["prefs"]["bg_version"] > 0
+    assert owner.get("/api/me/background").content == png
+    assert owner.get("/api/me/background").headers["content-type"] == "image/png"
+    gone = owner.delete("/api/me/background").json()
+    assert gone["prefs"]["background"] == "aurora" and gone["prefs"]["blur"] is True
+    assert owner.get("/api/me/background").status_code == 404

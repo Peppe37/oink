@@ -9,7 +9,7 @@ import { LANGUAGES, useErrorText, useI18n } from "../i18n";
 import { Field, PageHeader, Row, Sheet, Spinner, rise, stagger } from "../ui/bits";
 import { Icon, Tile } from "../ui/icons";
 
-type Panel = "profile" | "password" | "apps" | "users" | "bank" | "system" | "ai" | "mcp" | null;
+type Panel = "profile" | "customise" | "password" | "apps" | "users" | "bank" | "system" | "ai" | "mcp" | null;
 
 export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: User; onUser: (u: User) => void; onLogout: () => void; notify: (s: string) => void; onUpdate: () => void }) {
   const { t, lang } = useI18n();
@@ -34,6 +34,7 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
       <motion.div variants={rise}>
         <Glass className="card list group">
           {item("profile", "user", ["#ff8cc0", "#c94b8c"], t("settings.profile"), user.is_admin ? LANGUAGES[lang] : `${LANGUAGES[lang]} · ${user.base_currency}`)}
+          {!user.is_admin && item("customise", "sparkle", ["#8ee8c0", "#1fa87a"], t("settings.customise"), t(user.prefs?.home_total === "net_worth" ? "settings.showNetWorth" : "settings.showBalance"))}
           {item("password", "key", ["#ffd76a", "#f2a71b"], t("settings.security"))}
           {!user.is_admin && item("apps", "link", ["#6cc9ff", "#2f86e8"], t("settings.apps"))}
           {!user.is_admin && item("mcp", "sparkle", ["#cf95ff", "#9550e8"], t("settings.mcp"))}
@@ -58,6 +59,7 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
       <p className="faint center-text small-text">Oink {system?.version ?? ""}</p>
 
       <Sheet open={panel === "profile"} onClose={close} title={t("settings.profile")}><ProfilePanel user={user} onUser={(u) => { onUser(u); close(); }} /></Sheet>
+      <Sheet open={panel === "customise"} onClose={close} title={t("settings.customise")}><CustomisePanel user={user} onUser={onUser} /></Sheet>
       <Sheet open={panel === "password"} onClose={close} title={t("settings.security")}><PasswordPanel onDone={() => { notify(t("settings.passwordChanged")); close(); }} /></Sheet>
       <Sheet open={panel === "apps"} onClose={close} title={t("settings.apps")} wide><AppsPanel /></Sheet>
       <Sheet open={panel === "users"} onClose={close} title={t("settings.users")} wide><UsersPanel me={user} /></Sheet>
@@ -66,6 +68,58 @@ export function Settings({ user, onUser, onLogout, notify, onUpdate }: { user: U
       <Sheet open={panel === "mcp"} onClose={close} title={t("settings.mcp")} wide><MCPPanel system={system} /></Sheet>
       <Sheet open={panel === "system"} onClose={close} title={t("settings.system")}><SystemPanel system={system} onUpdate={() => { close(); onUpdate(); }} /></Sheet>
     </motion.div>
+  );
+}
+
+/** What the dashboard shows and how the pages look: the big figure, the picture behind. */
+function CustomisePanel({ user, onUser }: { user: User; onUser: (u: User) => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const prefs = user.prefs ?? {};
+  const total = prefs.home_total ?? "accounts";
+  const picture = prefs.background === "image";
+  const hasPicture = (prefs.bg_version ?? 0) > 0;
+  const run = async (job: () => Promise<User>) => {
+    setBusy(true);
+    try { setError(""); onUser(await job()); } catch (err) { setError(errorText(err)); } finally { setBusy(false); }
+  };
+  const pick = (file: File | undefined) => { if (file) run(() => api.uploadBackground(file)); };
+  return (
+    <div className="stack">
+      <h4 className="section-label">{t("settings.homeFigure")}</h4>
+      <div className="segmented" role="tablist">
+        {(["accounts", "net_worth"] as const).map((v) => (
+          <button key={v} type="button" role="tab" aria-selected={total === v} className={total === v ? "on" : ""} disabled={busy}
+            onClick={() => run(() => api.setPrefs({ home_total: v }))}>{t(v === "accounts" ? "settings.showBalance" : "settings.showNetWorth")}</button>
+        ))}
+      </div>
+      <p className="faint small-text">{t(total === "accounts" ? "settings.showBalanceHint" : "settings.showNetWorthHint")}</p>
+
+      <h4 className="section-label">{t("settings.background")}</h4>
+      <div className="bg-pick">
+        <button type="button" className={`bg-card aurora-preview ${!picture ? "on" : ""}`} disabled={busy} onClick={() => run(() => api.setPrefs({ background: "aurora" }))}><span>{t("settings.bgAurora")}</span></button>
+        <label className={`bg-card picture-preview ${picture ? "on" : ""}`} style={hasPicture ? { backgroundImage: `url(/api/me/background?v=${prefs.bg_version})` } : undefined}
+          onClick={(e) => { if (hasPicture && !picture) { e.preventDefault(); run(() => api.setPrefs({ background: "image" })); } }}>
+          <span>{hasPicture ? t("settings.bgPicture") : t("settings.bgChoose")}</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+      </div>
+      {hasPicture && (
+        <div className="row between wrap" style={{ gap: 8 }}>
+          <label className="btn ghost small">{t("settings.bgChange")}<input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} /></label>
+          <button type="button" className="btn ghost small danger" disabled={busy} onClick={() => run(() => api.deleteBackground())}>{t("settings.bgRemove")}</button>
+        </div>
+      )}
+      <div className="list group">
+        <label className="item switch-row">
+          <span className="row-text"><span className="row-title">{t("settings.blur")}</span><span className="row-detail">{picture ? t("settings.blurHint") : t("settings.blurNeedsPicture")}</span></span>
+          <input type="checkbox" className="switch" checked={!!prefs.blur} disabled={busy || !picture} onChange={(e) => run(() => api.setPrefs({ blur: e.target.checked }))} />
+        </label>
+      </div>
+      {error && <div className="error">{error}</div>}
+    </div>
   );
 }
 

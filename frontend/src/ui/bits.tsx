@@ -1,6 +1,7 @@
 /* Shared pieces: background, mascot, animated money, navigation (tab bar on phones,
    sidebar on large screens), sheets, toasts, list rows. */
 
+import type { Prefs } from "../api";
 import { animate, AnimatePresence, motion, useDragControls, useMotionValue, useSpring, useTransform, type MotionValue, type PanInfo } from "framer-motion";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -21,10 +22,17 @@ export function useWide(min = 900) {
   return wide;
 }
 
-export function Aurora() {
+/** The page background: the soft moving colours, or the person's own picture (blurred or not). */
+export function Aurora({ prefs }: { prefs?: Prefs }) {
+  const picture = prefs?.background === "image";
   return (
     <>
-      <div className="aurora" aria-hidden><i /><i /><i /><i /></div>
+      {picture ? (
+        <div className={`bg-image ${prefs?.blur ? "blur" : ""}`} aria-hidden
+          style={{ backgroundImage: `url(/api/me/background?v=${prefs?.bg_version ?? 0})` }} />
+      ) : (
+        <div className="aurora" aria-hidden><i /><i /><i /><i /></div>
+      )}
       <div className="grain" aria-hidden />
     </>
   );

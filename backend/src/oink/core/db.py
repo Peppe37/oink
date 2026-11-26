@@ -102,6 +102,8 @@ class User(Base):
     #: wrong passwords in a row; at LOCK_AFTER the account waits until `locked_until`
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    #: what this person chose: home_total, background, blur (see api/routes.py PREFS)
+    prefs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Invite(Base):

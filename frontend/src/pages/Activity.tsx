@@ -31,6 +31,12 @@ export function Activity({ notify }: { ai: boolean; notify: (s: string) => void 
   const [more, setMore] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [q, setQ] = useState("");
+  const [chips, setChips] = useState<{ kind: string; label: string }[]>([]);
+  useEffect(() => { // how the search was read: an amount, a date, a category, a word
+    if (!q.trim()) { setChips([]); return; }
+    const id = setTimeout(() => { api.understandSearch(q).then((r) => setChips(r.chips)).catch(() => setChips([])); }, 250);
+    return () => clearTimeout(id);
+  }, [q]);
   const [account, setAccount] = useState<number | undefined>();
   const [direction, setDirection] = useState<"" | "in" | "out">("");
   const [period, setPeriod] = useState<Period>("all");
@@ -100,12 +106,18 @@ export function Activity({ notify }: { ai: boolean; notify: (s: string) => void 
         <div className="row" style={{ gap: 8 }}>
           <Glass variant="pill" className="search" style={{ flex: 1 }}>
             <Icon name="search" size={18} className="faint" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("movements.search")} aria-label={t("common.search")} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("movements.searchHint")} aria-label={t("common.search")} />
           </Glass>
           <button className={`icon-btn glassy filter-btn ${filtersOpen || active ? "on" : ""}`} onClick={() => setFiltersOpen((v) => !v)} aria-label={t("movements.filters")}>
             <Icon name="settings" />{active > 0 && <span className="filter-count">{active}</span>}
           </button>
         </div>
+        {chips.length > 0 && (
+          <div className="search-chips" aria-live="polite">
+            <span className="faint small-text">{t("movements.understood")}</span>
+            {chips.map((c, i) => <span key={`${c.kind}-${i}`} className={`search-chip ${c.kind}`}>{c.label}</span>)}
+          </div>
+        )}
         <div className="segmented">
           {(["", "out", "in"] as const).map((d) => <button key={d} className={direction === d ? "on" : ""} onClick={() => setDirection(d)}>{t(d === "" ? "common.all" : d === "out" ? "movements.out" : "movements.in")}</button>)}
         </div>
