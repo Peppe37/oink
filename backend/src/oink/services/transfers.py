@@ -144,7 +144,9 @@ def match_transfers(db: Session, user: User, since: date | None = None) -> int:
         t
         for t in db.scalars(
             select(Transaction).where(
-                Transaction.user_id == user.id, Transaction.day >= start - WINDOW
+                Transaction.user_id == user.id,
+                Transaction.day >= start - WINDOW,
+                Transaction.category_by != "split",
             )
         )
         if _free(t)

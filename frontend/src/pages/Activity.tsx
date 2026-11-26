@@ -243,6 +243,7 @@ function TxSheet({ tx, onClose, onSaved, onDeleted }: { tx: Tx | null; onClose: 
       </div>
       <FromTo tx={tx} />
       {Number(tx.amount) < 0 && <MarkAs tx={tx} onDone={onSaved} />}
+      <SplitTx tx={tx} onDone={() => onSaved(tx)} />
       <div className="row between"><h4 className="section-label">{t("movements.category")}</h4>
         <button className="btn ghost small" onClick={() => setAllCats((v) => !v)}>{allCats ? t("plan.showLess") : t("movements.allCategories")}</button></div>
       <div className={`cat-grid ${allCats ? "" : "compact"}`}>
@@ -335,10 +336,11 @@ function MarkAs({ tx, onDone }: { tx: Tx; onDone: (tx: Tx) => void }) {
     try { await api.markPurchase(tx.id, planId); onDone({ ...tx, plan_id: planId, category: "investments", category_by: "plan" }); }
     catch (e) { setMsg(errorText(e)); }
   };
+  const [freq, setFreq] = useState("monthly");
   const asFixed = async () => {
-    const next = new Date(tx.day); next.setMonth(next.getMonth() + 1);
+    const next = new Date(tx.day); next.setMonth(next.getMonth() + ({ monthly: 1, quarterly: 3, yearly: 12 } as Record<string, number>)[freq] || 1);
     try {
-      await api.addFixed({ name: tx.counterparty || tx.description, amount, currency: tx.currency, frequency: "monthly",
+      await api.addFixed({ name: tx.counterparty || tx.description, amount, currency: tx.currency, frequency: freq,
         category: tx.category || undefined, next_due: next.toISOString().slice(0, 10), match: (tx.counterparty || tx.description).slice(0, 60) });
       setMsg(t("movements.fixedAdded"));
     } catch (e) { setMsg(errorText(e)); }
@@ -354,7 +356,12 @@ function MarkAs({ tx, onDone }: { tx: Tx; onDone: (tx: Tx) => void }) {
       <h4 className="section-label">{t("movements.markAs")}</h4>
       <div className="row wrap" style={{ gap: 8 }}>
         <button className={`chip ${mode === "plan" ? "on" : ""}`} onClick={() => setMode(mode === "plan" ? "" : "plan")}><Icon name="investments" size={15} /> {t("movements.asPlan")}</button>
-        <button className="chip" onClick={asFixed}><Icon name="bills" size={15} /> {t("movements.asFixed")}</button>
+        <span className="row" style={{ gap: 4 }}>
+          <button className="chip" onClick={asFixed}><Icon name="bills" size={15} /> {t("movements.asFixed")}</button>
+          <select className="field mini-select" value={freq} onChange={(e) => setFreq(e.target.value)} aria-label={t("invest.frequency")}>
+            {["monthly", "quarterly", "yearly"].map((f) => <option key={f} value={f}>{t(`invest.freq.${f}` as never)}</option>)}
+          </select>
+        </span>
       </div>
       {mode === "plan" && plans && (
         <div className="list" style={{ marginTop: 8 }}>
@@ -492,6 +499,52 @@ function ReviewWizard({ onDone }: { onDone: (applied: number) => void }) {
       <div className="row between">
         <button className="btn ghost" onClick={() => setResult(null)}>{t("common.back")}</button>
         {total > 0 && <button className="btn" onClick={apply} disabled={busy || picked === 0}>{busy ? <Spinner /> : null} {t("review.apply", { count: picked })}</button>}
+      </div>
+    </div>
+  );
+}
+
+/** One payment, several things: split it into parts (each its own name and category);
+ *  a part can then be a fixed cost of its own (the server monthly, the domain yearly). */
+function SplitTx({ tx, onDone }: { tx: Tx; onDone: () => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const total = Math.abs(Number(tx.amount));
+  const [open, setOpen] = useState(false);
+  const [parts, setParts] = useState([{ description: tx.counterparty || tx.description, amount: "", category: tx.category }, { description: "", amount: "", category: tx.category }]);
+  const [error, setError] = useState("");
+  if (tx.parent_id) return (
+    <div className="mark-as"><span className="pill-note">{t("movements.isPart")}</span>
+      <button className="btn ghost small" onClick={async () => { await api.unsplitTx(tx.id); onDone(); }}>{t("movements.unsplit")}</button></div>
+  );
+  if (!open) return <div className="mark-as"><button className="chip" onClick={() => setOpen(true)}><Icon name="exchange" size={15} /> {t("movements.split")}</button></div>;
+  const used = parts.reduce((sum, p) => sum + (Number(p.amount.replace(",", ".")) || 0), 0);
+  const left = Math.round((total - used) * 100) / 100;
+  const set = (i: number, key: "description" | "amount" | "category", value: string) => setParts((old) => old.map((p, j) => (j === i ? { ...p, [key]: value } : p)));
+  const save = async () => {
+    try { await api.splitTx(tx.id, parts.filter((p) => p.description && p.amount).map((p) => ({ ...p, amount: p.amount.replace(",", ".") }))); onDone(); }
+    catch (e) { setError(errorText(e)); }
+  };
+  return (
+    <div className="stack split-box">
+      <h4 className="section-label">{t("movements.split")}</h4>
+      {parts.map((p, i) => (
+        <div key={i} className="split-part">
+          <input className="field" placeholder={t("movements.partName")} value={p.description} onChange={(e) => set(i, "description", e.target.value)} />
+          <input className="field num" inputMode="decimal" placeholder="0.00" value={p.amount} onChange={(e) => set(i, "amount", e.target.value)} />
+          <select className="field" value={p.category} onChange={(e) => set(i, "category", e.target.value)}>
+            <option value="">{t("category.none")}</option>{CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(t, c)}</option>)}
+          </select>
+        </div>
+      ))}
+      <div className="row between wrap" style={{ gap: 8 }}>
+        <button className="btn ghost small" onClick={() => setParts((old) => [...old, { description: "", amount: left > 0 ? String(left) : "", category: tx.category }])}><Icon name="plus" size={14} /> {t("plan.addPart")}</button>
+        <span className={`num small-text ${left === 0 ? "up" : "faint"}`}>{left === 0 ? t("movements.splitOk") : t("movements.splitLeft", { amount: fmt.money(left, tx.currency) })}</span>
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn ghost" onClick={() => setOpen(false)}>{t("common.back")}</button>
+        <button className="btn" disabled={left !== 0} onClick={save}>{t("movements.splitSave")}</button>
       </div>
     </div>
   );

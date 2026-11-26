@@ -414,3 +414,38 @@ def test_a_terminal_code_gets_its_real_name_and_fuel_is_known(owner: TestClient)
         },
     ).json()
     assert eni["category"] == "fuel"
+
+
+def test_a_movement_splits_into_parts_and_back(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "100"}).json()
+    ovh = owner.post(
+        "/api/transactions",
+        json={
+            "account_id": acc["id"],
+            "day": "2026-11-02",
+            "amount": "-18.92",
+            "description": "Ovhcloud",
+        },
+    ).json()
+    bad = owner.post(
+        f"/api/transactions/{ovh['id']}/split",
+        json={
+            "parts": [
+                {"amount": "7.92", "description": "VPS"},
+                {"amount": "10", "description": "Dominio"},
+            ]
+        },
+    )
+    assert bad.status_code == 422  # parts must add up
+    parts = owner.post(f"/api/transactions/{ovh['id']}/split", json={"parts": [
+        {"amount": "7.92", "description": "VPS", "category": "subscriptions"},
+        {"amount": "11", "description": "Dominio", "category": "subscriptions"}]}).json()  # fmt: skip
+    assert [(p["counterparty"], p["amount"]) for p in parts] == [
+        ("VPS", "-7.92"),
+        ("Dominio", "-11.00"),
+    ]
+    shown = owner.get("/api/transactions").json()
+    assert sorted(r["counterparty"] for r in shown) == ["Dominio", "VPS"]  # the original is hidden
+    assert shown[0]["balance_after"] == "81.08"  # the balance counts the split once
+    assert owner.delete(f"/api/transactions/{parts[0]['id']}/split").json() == {"ok": True}
+    assert [r["id"] for r in owner.get("/api/transactions").json()] == [ovh["id"]]

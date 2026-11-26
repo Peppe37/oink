@@ -204,6 +204,9 @@ class Transaction(Base):
     document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     #: order within the day, newest highest (banks give no time of day)
     seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: a part of a movement split by the person (the original stays, hidden, so the bank's
+    #: copy is still recognised; its category_by is «split»)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
 
 

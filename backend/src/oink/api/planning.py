@@ -292,6 +292,75 @@ def add_plan(
     return _plan_out(p)
 
 
+class PlanItemIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=40)
+    name: str = ""
+    amount: str | float
+
+
+class PlanBatchIn(BaseModel):
+    """One savings plan of several securities («300 € on the 16th: 100 each»)."""
+
+    account_id: int | None = None
+    day: int | None = Field(default=None, ge=1, le=31)
+    start: date
+    frequency: Frequency = "monthly"
+    currency: str = "EUR"
+    items: list[PlanItemIn] = Field(min_length=1, max_length=20)
+
+
+@router.post("/plans/batch")
+def add_plans(
+    body: PlanBatchIn,
+    who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    account_id = _own_account_id(db, who, body.account_id)
+    created = []
+    for item in body.items:
+        amount = _dec(item.amount, "amount")
+        if amount is None or amount <= 0:
+            raise HTTPException(422, "amount_invalid")
+        p = Plan(user_id=who.user_id, symbol=item.symbol.strip().upper(), name=item.name[:160],
+                 amount=amount, currency=normalise_code(body.currency), frequency=body.frequency,
+                 start=body.start, active=True, account_id=account_id, day=body.day)  # fmt: skip
+        db.add(p)
+        created.append(p)
+    db.commit()
+    match_executions(db, who.user)
+    return [_plan_out(p) for p in created]
+
+
+class ReplaceIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=40)
+    name: str = ""
+    start: date  # the first purchase of the new security
+
+
+@router.post("/plans/{plan_id}/replace")
+def replace_plan(
+    plan_id: int, body: ReplaceIn, who: Caller = Depends(require("accounts:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:  # fmt: skip
+    """Same plan, another security from a date (Nvidia → Anthropic from December): the old
+    one ends the day before, the new one takes its amount, day and account."""
+    old = db.get(Plan, plan_id)
+    if old is None or old.user_id != who.user_id:
+        raise HTTPException(404, "plan_unknown")
+    old.end = body.start - timedelta(days=1)
+    new = Plan(user_id=who.user_id, symbol=body.symbol.strip().upper(), name=body.name[:160],
+               amount=old.amount, currency=old.currency, frequency=old.frequency, start=body.start,
+               active=True, account_id=old.account_id, day=old.day)  # fmt: skip
+    db.add(new)
+    for tx in db.scalars(
+        select(Transaction).where(Transaction.plan_id == old.id, Transaction.day > old.end)
+    ):
+        tx.plan_id = None  # purchases after the switch belong to the new security
+    db.commit()
+    match_executions(db, who.user)
+    return _plan_out(new)
+
+
 @router.patch("/plans/{plan_id}")
 def update_plan(
     plan_id: int, body: PlanIn, who: Caller = Depends(require("accounts:write")),

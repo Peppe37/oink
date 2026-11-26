@@ -178,3 +178,36 @@ async def test_a_brokers_statement_turns_into_ready_plans(db: Database, monkeypa
             ("NVD.DE", "100", 16, broker),
             ("SXR8.DE", "100", 16, broker),
         ]
+
+
+def test_one_plan_of_three_securities_and_a_switch_to_an_unlisted_one(owner: Any) -> None:
+    acc = owner.post(
+        "/api/accounts", json={"name": "Trade Republic", "institution": "Trade Republic"}
+    ).json()
+    for month in ("09", "10", "11"):
+        for _ in range(3):
+            owner.post(
+                "/api/transactions",
+                json={
+                    "account_id": acc["id"],
+                    "day": f"2026-{month}-16",
+                    "amount": "-100",
+                    "description": "—",
+                },
+            )
+    plans = owner.post("/api/plans/batch", json={"account_id": acc["id"], "day": 16, "start": "2026-09-01", "items": [
+        {"symbol": "NVD.DE", "name": "NVIDIA", "amount": "100"}, {"symbol": "APC.DE", "name": "Apple", "amount": "100"},
+        {"symbol": "SXR8.DE", "name": "iShares Core S&P 500", "amount": "100"}]}).json()  # fmt: skip
+    assert len(plans) == 3
+    nvda = plans[0]["id"]
+    new = owner.post(
+        f"/api/plans/{nvda}/replace",
+        json={"symbol": "CUSTOM:ANTHROPIC", "name": "Anthropic", "start": "2026-12-01"},
+    ).json()
+    assert (
+        new["symbol"] == "CUSTOM:ANTHROPIC" and new["day"] == 16 and new["account_id"] == acc["id"]
+    )
+    listed = {p["id"]: p for p in owner.get("/api/plans").json()}
+    assert listed[nvda]["end"] == "2026-11-30" and listed[nvda]["position"]["executions"] == 3
+    spending = [t for t in owner.get("/api/transactions").json() if t["category"] != "investments"]
+    assert spending == []  # all nine purchases are investments

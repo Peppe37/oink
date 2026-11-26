@@ -67,6 +67,7 @@ class Book:
                 Transaction.day >= start,
                 Transaction.day < end,
                 Transaction.account_id.in_(accounts),
+                Transaction.category_by != "split",  # split: its parts count instead
             )
         )
         out = []

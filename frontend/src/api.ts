@@ -10,7 +10,7 @@ export type Account = {
 };
 export type Tx = {
   id: number; account_id: number; day: string; amount: string; currency: string; description: string;
-  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null; plan_id?: number | null; balance_after?: string | null; total_after?: number | null; partner_account_id?: number | null;
+  counterparty: string; category: string; category_by: string; note: string; source: string; transfer_id: number | null; plan_id?: number | null; balance_after?: string | null; total_after?: number | null; partner_account_id?: number | null; parent_id?: number | null;
 };
 export type Recurring = { name: string; monthly: number; last: number; increased: boolean; category: string; last_day: string };
 export type MonthSummary = {
@@ -204,6 +204,11 @@ export const api = {
   updatePlan: (id: number, body: Omit<PlanItem, "id" | "position">) => call<PlanItem>(`/plans/${id}`, { method: "PATCH", body: json(body) }),
   markPurchase: (txId: number, planId: number) => call(`/transactions/${txId}/plan`, { method: "POST", body: json({ plan_id: planId }) }),
   unmarkPurchase: (txId: number) => call(`/transactions/${txId}/plan`, { method: "DELETE" }),
+  addPlans: (body: { account_id: number | null; day: number | null; start: string; frequency: string; currency: string; items: { symbol: string; name: string; amount: string }[] }) =>
+    call<PlanItem[]>("/plans/batch", { method: "POST", body: json(body) }),
+  replacePlan: (id: number, body: { symbol: string; name: string; start: string }) => call<PlanItem>(`/plans/${id}/replace`, { method: "POST", body: json(body) }),
+  splitTx: (id: number, parts: { amount: string; description: string; category: string }[]) => call<Tx[]>(`/transactions/${id}/split`, { method: "POST", body: json({ parts }) }),
+  unsplitTx: (id: number) => call(`/transactions/${id}/split`, { method: "DELETE" }),
   planProposals: () => call<PlanProposal[]>("/plans/proposals"),
   moveDocument: (id: number, accountId: number) => call<Doc>(`/documents/${id}/move`, { method: "POST", body: json({ account_id: accountId }) }),
   planSuggestions: () => call<PlanSuggestion[]>("/plans/suggestions"),

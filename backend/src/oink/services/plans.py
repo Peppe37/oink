@@ -129,7 +129,11 @@ async def plan_positions(db: Session, user: User) -> dict[int, dict[str, Any]]:
         units: Decimal | None = Decimal(0)
         if txs:
             try:
-                closes = await daily_closes(plan.symbol)
+                closes = (
+                    {}
+                    if plan.symbol.upper().startswith("CUSTOM:")
+                    else await daily_closes(plan.symbol)
+                )
             except MarketError:
                 closes = {}
             for t in txs:
@@ -218,6 +222,7 @@ def suggestions(db: Session, user: User, today: date | None = None) -> list[dict
     for t in db.scalars(
         select(Transaction).where(
             Transaction.user_id == user.id,
+            Transaction.category_by != "split",
             Transaction.amount < 0,
             Transaction.day >= since,
             Transaction.plan_id.is_(None),
@@ -300,6 +305,7 @@ async def proposals(db: Session, user: User, today: date | None = None) -> list[
     for t in db.scalars(
         select(Transaction).where(
             Transaction.user_id == user.id,
+            Transaction.category_by != "split",
             Transaction.amount < 0,
             Transaction.day >= since,
             Transaction.plan_id.is_(None),

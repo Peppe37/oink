@@ -27,6 +27,7 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
   const [proposed, setProposed] = useState<PlanProposal[]>([]);
   const [preset, setPreset] = useState<Partial<PlanItem> | null>(null);
   const [editing, setEditing] = useState<PlanItem | null>(null);
+  const [grouping, setGrouping] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [simFor, setSimFor] = useState<{ symbol: string; monthly: number } | null>(null);
   const load = useCallback(() => {
@@ -86,7 +87,7 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
 
         <motion.div variants={rise} className="span-5">
           <Glass className="card">
-            <div className="row between"><h3>{t("invest.plans")}</h3><button className="btn ghost small" onClick={() => openPlan(null)}><Icon name="plus" size={16} /> {t("common.add")}</button></div>
+            <div className="row between"><h3>{t("invest.plans")}</h3><button className="btn ghost small" onClick={() => setGrouping(true)}><Icon name="plus" size={16} /> {t("invest.newPlan")}</button></div>
             {proposed.length > 0 && (
               <div className="found-plans">
                 <div className="row between"><span className="row" style={{ gap: 8 }}><Icon name="sparkle" size={18} /> <strong>{t("invest.found", { count: proposed.length })}</strong></span>
@@ -130,6 +131,9 @@ export function Invest({ notify, currency }: { notify: (s: string) => void; curr
       </div>
 
       <Sheet open={adding === "holding"} onClose={() => setAdding(null)} title={t("invest.add")}><AddHolding onDone={() => { setAdding(null); load(); }} /></Sheet>
+      <Sheet open={grouping} onClose={() => setGrouping(false)} title={t("invest.newPlan")}>
+        {grouping && <PlanGroup currency={cur} accounts={accounts} onDone={() => { setGrouping(false); load(); notify(t("invest.added")); }} />}
+      </Sheet>
       <Sheet open={adding === "plan"} onClose={() => setAdding(null)} title={editing ? editing.name || editing.symbol : t("invest.addPlan")}><AddPlan key={`${editing?.id ?? "new"}-${preset?.amount ?? ""}`} currency={cur} accounts={accounts} preset={preset} editing={editing} onDone={() => { setAdding(null); load(); }} /></Sheet>
     </motion.div>
   );
@@ -151,8 +155,83 @@ function SymbolSearch({ onPick }: { onPick: (hit: SearchHit) => void }) {
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("invest.searchPlaceholder")} autoFocus />{busy && <Spinner />}</Glass>
       <div className="list">
         {hits.map((h) => <Row key={h.symbol} icon={kindTile(h.kind, 34)} title={h.name} detail={`${h.symbol} · ${h.exchange}`} onClick={() => onPick(h)} chevron />)}
+        {q.trim().length >= 2 && !busy && (
+          <Row icon={kindTile("other", 34)} title={t("invest.notListed", { name: q.trim() })} detail={t("invest.notListedHint")}
+            onClick={() => onPick({ symbol: `CUSTOM:${q.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 30)}`, name: q.trim(), kind: "other", exchange: "" })} chevron />
+        )}
       </div>
     </div>
+  );
+}
+
+/** «From December, Anthropic instead of Nvidia»: the plan goes on with another security. */
+function ReplaceSecurity({ plan, onDone }: { plan: PlanItem; onDone: () => void }) {
+  const { t } = useI18n();
+  const errorText = useErrorText();
+  const next = new Date(); next.setMonth(next.getMonth() + 1, 1);
+  const [open, setOpen] = useState(false);
+  const [hit, setHit] = useState<SearchHit | null>(null);
+  const [from, setFrom] = useState(next.toISOString().slice(0, 10));
+  const [error, setError] = useState("");
+  if (!open) return <button type="button" className="btn ghost" onClick={() => setOpen(true)}><Icon name="exchange" size={16} /> {t("invest.replace")}</button>;
+  if (!hit) return <SymbolSearch onPick={setHit} />;
+  return (
+    <div className="stack replace-box">
+      <p style={{ margin: 0 }}>{t("invest.replaceWith", { old: plan.name || plan.symbol, new: hit.name })}</p>
+      <Field label={t("invest.replaceFrom")}><input className="field" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
+      {error && <div className="error">{error}</div>}
+      <button type="button" className="btn" onClick={async () => {
+        try { await api.replacePlan(plan.id, { symbol: hit.symbol, name: hit.name, start: from }); onDone(); } catch (e) { setError(errorText(e)); }
+      }}>{t("invest.replaceConfirm")}</button>
+    </div>
+  );
+}
+
+/** One savings plan of several securities: account, day, start, and how much each gets. */
+function PlanGroup({ currency, accounts, onDone }: { currency: string; accounts: Account[]; onDone: () => void }) {
+  const { t, fmt } = useI18n();
+  const errorText = useErrorText();
+  const [account, setAccount] = useState<number | "">(accounts.find((a) => /trade republic|scalable|directa|degiro/i.test(`${a.institution} ${a.name}`))?.id ?? "");
+  const [day, setDay] = useState("16");
+  const [start, setStart] = useState(new Date().toISOString().slice(0, 10));
+  const [items, setItems] = useState<{ hit: SearchHit; amount: string }[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState("");
+  const total = items.reduce((sum, i) => sum + (Number(i.amount.replace(",", ".")) || 0), 0);
+  if (picking) return <SymbolSearch onPick={(hit) => { setItems((old) => [...old, { hit, amount: "100" }]); setPicking(false); }} />;
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.addPlans({ account_id: account || null, day: day ? Number(day) : null, start, frequency: "monthly", currency,
+        items: items.map((i) => ({ symbol: i.hit.symbol, name: i.hit.name, amount: i.amount.replace(",", ".") })) });
+      onDone();
+    } catch (err) { setError(errorText(err)); }
+  };
+  return (
+    <form className="stack" onSubmit={save}>
+      <div className="two">
+        <Field label={t("invest.payFrom")}>
+          <select className="field" value={account} onChange={(e) => setAccount(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">—</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </Field>
+        <Field label={t("invest.dayOfMonth")}><input className="field num" inputMode="numeric" value={day} onChange={(e) => setDay(e.target.value.replace(/\D/g, "").slice(0, 2))} /></Field>
+      </div>
+      <Field label={t("invest.start")}><input className="field" type="date" value={start} onChange={(e) => setStart(e.target.value)} /></Field>
+      <h4 className="section-label">{t("invest.securities")}</h4>
+      {items.map((it, i) => (
+        <div key={i} className="row" style={{ gap: 8 }}>
+          {kindTile(it.hit.kind, 32)}
+          <span className="row-text" style={{ flex: 1 }}><span className="row-title ellipsis">{it.hit.name}</span><span className="row-detail">{it.hit.symbol.startsWith("CUSTOM:") ? t("invest.unlisted") : it.hit.symbol}</span></span>
+          <input className="field num" style={{ width: 100 }} inputMode="decimal" value={it.amount} onChange={(e) => setItems((old) => old.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))} />
+          <button type="button" className="icon-btn" aria-label={t("common.delete")} onClick={() => setItems((old) => old.filter((_, j) => j !== i))}><Icon name="trash" size={16} /></button>
+        </div>
+      ))}
+      <button type="button" className="btn ghost" onClick={() => setPicking(true)}><Icon name="plus" size={16} /> {t("invest.addSecurity")}</button>
+      {items.length > 0 && <p className="muted" style={{ margin: 0 }}>{t("invest.planTotal", { amount: fmt.money(total, currency), day: day || "—" })}</p>}
+      {error && <div className="error">{error}</div>}
+      <button className="btn big-btn" disabled={items.length === 0}>{t("common.add")}</button>
+    </form>
   );
 }
 
@@ -253,6 +332,7 @@ function AddPlan({ currency, accounts, preset, editing, onDone }: {
       </div>
       {error && <div className="error">{error}</div>}
       <button className="btn big-btn">{editing ? t("common.save") : t("common.add")}</button>
+      {editing && <ReplaceSecurity plan={editing} onDone={onDone} />}
       {editing && <button type="button" className="btn ghost danger" onClick={async () => { await api.deletePlan(editing.id); onDone(); }}><Icon name="trash" size={16} /> {t("common.delete")}</button>}
     </form>
   );

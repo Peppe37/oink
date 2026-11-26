@@ -19,7 +19,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -488,7 +488,11 @@ def running_balances(db: Session, user: User) -> tuple[dict[int, int], dict[int,
     total_after: dict[int, float] = {}
     for t in db.scalars(
         select(Transaction)
-        .where(Transaction.user_id == user.id, Transaction.account_id.in_(by_account))
+        .where(
+            Transaction.user_id == user.id,
+            Transaction.account_id.in_(by_account),
+            Transaction.category_by != "split",
+        )
         .order_by(Transaction.day.desc(), func.coalesce(Transaction.seq, Transaction.id).desc())
     ):
         after[t.id] = by_account[t.account_id]
@@ -522,7 +526,11 @@ def transactions(
         "amount_desc": (func.abs(Transaction.amount).desc(), Transaction.day.desc()),
         "amount_asc": (func.abs(Transaction.amount).asc(), Transaction.day.desc()),
     }[sort]
-    query = select(Transaction).where(Transaction.user_id == who.user_id).order_by(*order)
+    query = (
+        select(Transaction)
+        .where(Transaction.user_id == who.user_id, Transaction.category_by != "split")
+        .order_by(*order)
+    )
     if account_id is not None:
         query = query.where(Transaction.account_id == account_id)
     if month:
@@ -651,6 +659,71 @@ def update_transaction(
             tx.counterparty = name
     db.commit()
     return TransactionOut.of(tx)
+
+
+class SplitPartIn(BaseModel):
+    amount: str = Field(min_length=1, max_length=32)  # positive: a share of the movement
+    description: str = Field(min_length=1, max_length=200)
+    category: str = Field(default="", max_length=40)
+
+
+class SplitTxIn(BaseModel):
+    parts: list[SplitPartIn] = Field(min_length=2, max_length=12)
+
+
+@api.post("/transactions/{tx_id}/split", response_model=list[TransactionOut])
+def split_transaction(
+    tx_id: int,
+    body: SplitTxIn,
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> list[TransactionOut]:
+    """One payment, several things (a server and a domain in one OVH charge): the movement
+    becomes its parts, each with its own description and category. The parts must add up
+    to the movement; the original stays hidden, so the bank's copy is still recognised."""
+    tx = _tx(db, who, tx_id)
+    if tx.parent_id is not None or tx.category_by == "split":
+        raise HTTPException(422, "already_split")
+    try:
+        amounts = [abs(to_minor(p.amount.replace(",", "."), tx.currency)) for p in body.parts]
+    except MoneyError as exc:
+        raise fail(422, exc) from exc
+    if sum(amounts) != abs(tx.amount) or any(a == 0 for a in amounts):
+        raise HTTPException(422, "split_total")
+    sign = -1 if tx.amount < 0 else 1
+    parts = []
+    for i, (part, amount) in enumerate(zip(body.parts, amounts, strict=True)):
+        child = Transaction(
+            user_id=tx.user_id, account_id=tx.account_id, day=tx.day, amount=sign * amount,
+            currency=tx.currency, counterparty=part.description.strip(),
+            description=tx.counterparty or tx.description,  # still found by the payee's text
+            category=part.category.strip().lower(), category_by="user" if part.category else "",
+            source="split", fingerprint=f"split:{tx.id}:{i}", parent_id=tx.id,
+            seq=tx.seq, document_id=tx.document_id,
+        )  # fmt: skip
+        db.add(child)
+        parts.append(child)
+    unlink_transfer(db, tx)
+    tx.plan_id = None
+    tx.category_by = "split"
+    db.commit()
+    return [TransactionOut.of(c) for c in parts]
+
+
+@api.delete("/transactions/{tx_id}/split")
+def unsplit_transaction(
+    tx_id: int, who: Caller = Depends(require("transactions:write")), db: Session = Depends(get_db)
+) -> dict[str, bool]:
+    """Put a split movement back together (call it with the original or any of its parts)."""
+    tx = _tx(db, who, tx_id)
+    parent = db.get(Transaction, tx.parent_id) if tx.parent_id else tx
+    if parent is None or parent.category_by != "split":
+        raise HTTPException(422, "not_split")
+    for child in db.scalars(select(Transaction).where(Transaction.parent_id == parent.id)):
+        db.delete(child)
+    parent.category_by = ""
+    db.commit()
+    return {"ok": True}
 
 
 @api.delete("/transactions/{tx_id}")

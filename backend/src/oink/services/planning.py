@@ -92,7 +92,8 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
     for h in [*rows, *synthetic]:
         quantity = h.quantity + extra.get(h.symbol.upper(), Decimal(0)) if h.id else h.quantity
         price, currency, stale = h.manual_price, h.currency, False
-        if price is None:
+        custom = h.symbol.upper().startswith("CUSTOM:")  # not listed (e.g. a private company)
+        if price is None and not custom:
             try:
                 q = await quote(db, h.symbol) if refresh else db.get(Quote, h.symbol.upper())
                 if q is not None:
@@ -101,6 +102,8 @@ async def holdings_value(db: Session, book: Book, refresh: bool = True) -> dict[
                 cached = db.get(Quote, h.symbol.upper())
                 price, stale = (cached.price, True) if cached else (None, True)
         value_native = float(price * quantity) if price is not None else None
+        if value_native is None and custom and h.cost is not None:
+            value_native = float(h.cost)  # no market price: worth what was paid in
         value = to_base(book, value_native, currency) if value_native is not None else None
         cost = to_base(book, h.cost, h.currency) if h.cost is not None else None
         if value is not None:

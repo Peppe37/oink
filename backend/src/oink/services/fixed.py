@@ -40,7 +40,7 @@ def payments(db: Session, cost: FixedCost, siblings: int = 1) -> list[Transactio
         return []
     out = []
     for t in db.scalars(
-        select(Transaction).where(Transaction.user_id == cost.user_id, Transaction.amount < 0)
+        select(Transaction).where(Transaction.user_id == cost.user_id, Transaction.amount < 0, Transaction.category_by != "split")
         .order_by(Transaction.day.desc())
     ):  # fmt: skip
         if key not in normalise(f"{t.description} {t.counterparty}"):

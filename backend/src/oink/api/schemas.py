@@ -119,6 +119,7 @@ class TransactionOut(BaseModel):
     balance_after: str | None = None  # its account's balance right after it
     total_after: float | None = None  # all accounts, main currency, right after it
     partner_account_id: int | None = None  # the other account of a transfer
+    parent_id: int | None = None  # a part of a split movement
 
     @classmethod
     def of(cls, t: Transaction) -> TransactionOut:
@@ -135,6 +136,7 @@ class TransactionOut(BaseModel):
             note=t.note,
             transfer_id=t.transfer_id,
             plan_id=t.plan_id,
+            parent_id=t.parent_id,
             source=t.source,
         )
 

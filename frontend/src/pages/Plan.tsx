@@ -215,7 +215,6 @@ function FixedEdit({ item, onDone }: { item: FixedItem; onDone: () => void }) {
             <option value="">{t("category.none")}</option>{CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(t, c)}</option>)}</select></Field>
           <Field label={`${t("plan.nextDue")} (${t("common.optional")})`}><input className="field" type="date" value={due} onChange={(e) => setDue(e.target.value)} /></Field>
         </div>
-        <button type="button" className="btn ghost" onClick={() => setSplitting(true)}><Icon name="exchange" size={16} /> {t("plan.split")}</button>
       </>) : (<>
         <p className="muted small-text" style={{ margin: 0 }}>{t("plan.splitHint", { amount: item.amount })}</p>
         {parts.map((p, i) => (

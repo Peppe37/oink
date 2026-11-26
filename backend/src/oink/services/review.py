@@ -41,7 +41,9 @@ async def review(
     every = list(
         db.scalars(
             select(Transaction).where(
-                Transaction.user_id == user.id, Transaction.source != "pending"
+                Transaction.user_id == user.id,
+                Transaction.source != "pending",
+                Transaction.category_by != "split",
             )
         )
     )
