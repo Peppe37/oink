@@ -524,3 +524,31 @@ def test_a_movement_splits_into_parts_and_back(owner: TestClient) -> None:
     assert shown[0]["balance_after"] == "81.08"  # the balance counts the split once
     assert owner.delete(f"/api/transactions/{parts[0]['id']}/split").json() == {"ok": True}
     assert [r["id"] for r in owner.get("/api/transactions").json()] == [ovh["id"]]
+
+
+def test_an_upgrade_keeps_every_row(tmp_path: Path) -> None:
+    """0.7.0 lost everything: rebuilding `users` in a migration cascade-deleted accounts,
+    movements and documents. A database one revision behind, full of data, must come
+    through the upgrade whole, with a copy of it taken first."""
+    from alembic import command
+
+    from oink.core.db import Database
+    from oink.core.migrate import config
+
+    settings = Settings(data_dir=tmp_path, admin_password=PASSWORD, update_check=False,
+                        enable_banking_key_file=tmp_path / "x")  # fmt: skip
+    with TestClient(create_app(settings, background=False), base_url="https://t") as c:
+        c.post("/api/auth/signup", json={"username": "giu", "password": PASSWORD})
+        acc = c.post("/api/accounts", json={"name": "Revolut", "balance": "100"}).json()
+        c.post("/api/transactions", json={"account_id": acc["id"], "day": "2026-11-02",
+                                          "amount": "-5", "description": "coffee"})  # fmt: skip
+    db = Database(settings.db_url)
+    command.downgrade(config(db.engine), "0009")
+    with TestClient(create_app(settings, background=False), base_url="https://t") as c:
+        assert (
+            c.post("/api/auth/login", json={"username": "giu", "password": PASSWORD}).status_code
+            == 200
+        )
+        assert [a["name"] for a in c.get("/api/accounts").json()] == ["Revolut"]
+        assert len(c.get("/api/transactions").json()) == 1
+    assert (tmp_path / "oink-before-migration-0009.db").is_file()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sqlite3
 from pathlib import Path
 
 from alembic import command
@@ -49,11 +50,44 @@ def _set_aside_legacy(engine: Engine) -> None:
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
 
 
+def _pending(engine: Engine) -> str | None:
+    """The current revision when an upgrade is due (None: up to date, or a new database)."""
+    from alembic.script import ScriptDirectory
+
+    tables = set(inspect(engine).get_table_names())
+    if "alembic_version" not in tables:
+        return None
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT version_num FROM alembic_version")).first()
+    current = str(row[0]) if row else None
+    head = ScriptDirectory.from_config(config(engine)).get_current_head()
+    return current if current and current != head else None
+
+
+def _backup(engine: Engine, revision: str) -> None:
+    """A consistent copy (pending WAL pages included) before the schema changes."""
+    path = engine.url.database
+    if not path or not Path(path).is_file():
+        return
+    target = Path(path).with_name(f"oink-before-migration-{revision}.db")
+    source = sqlite3.connect(path)
+    try:
+        copy = sqlite3.connect(target)
+        with copy:
+            source.backup(copy)
+        copy.close()
+    finally:
+        source.close()
+    log.warning("database copied to %s before upgrading from %s", target, revision)
+
+
 def upgrade(engine: Engine, admin_username: str = "admin") -> None:
     password = None
     if _legacy(engine):
         password = _legacy_password(engine)
         _set_aside_legacy(engine)
+    if engine.dialect.name == "sqlite" and (revision := _pending(engine)):
+        _backup(engine, revision)
     command.upgrade(config(engine), "head")
     if password:
         with engine.begin() as conn:
