@@ -47,6 +47,22 @@ INTERNAL = {"transfers", "savings", "investments", "crypto"}
 #: the bank link and the statement of the same payment may differ by this many days
 #: (booking date against the day of the payment, weekends, card payments abroad)
 NEAR_DAYS = 5
+#: up to this many days apart the same amount from the other source is the same payment;
+#: further (up to NEAR_DAYS) only when the payee's name has a word in common — two different
+#: payments of the same amount a few days apart are common
+BLIND_DAYS = 3
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in normalise(text).split() if len(w) >= 4 and not any(c.isdigit() for c in w)}
+
+
+def similar(a: str, b: str) -> bool:
+    return bool(_words(a) & _words(b))
+
+
+def _wording(t: Transaction) -> str:
+    return f"{t.description} {t.counterparty}"
 
 
 def normalise(text: str) -> str:
@@ -177,6 +193,21 @@ def inherit_categories(db: Session, user_id: int) -> int:
     return done
 
 
+def _take_near(
+    other: dict[tuple[date, int], list[Transaction]], m: NewMovement
+) -> tuple[date, int] | None:
+    """The other source's copy of this payment a few days away, nearest first: used up so
+    it can't match twice. Beyond BLIND_DAYS the payee must look alike."""
+    wording = f"{m.description} {m.counterparty}"
+    for d in range(1, NEAR_DAYS + 1):
+        for k in ((m.day - timedelta(days=d), m.amount), (m.day + timedelta(days=d), m.amount)):
+            for tx in other.get(k, []):
+                if d <= BLIND_DAYS or similar(wording, _wording(tx)):
+                    other[k].remove(tx)
+                    return k
+    return None
+
+
 def add_movements(
     db: Session, account: Account, movements: list[NewMovement], source: str,
     document_id: int | None = None,
@@ -200,7 +231,7 @@ def add_movements(
     )
     counts: Counter[tuple[date, int, str]] = Counter()
     same: Counter[tuple[date, int]] = Counter()
-    other: Counter[tuple[date, int]] = Counter()
+    other: dict[tuple[date, int], list[Transaction]] = {}  # the other source's, still free
     blank: dict[tuple[date, int], list[Transaction]] = {}  # existing ones without wording
     if movements:
         start = min(m.day for m in movements) - timedelta(days=NEAR_DAYS)
@@ -215,7 +246,7 @@ def add_movements(
         ):
             same[(tx.day, tx.amount)] += 1
             if tx.source != source:
-                other[(tx.day, tx.amount)] += 1
+                other.setdefault((tx.day, tx.amount), []).append(tx)
             if (not tx.description.strip("—- ") and not tx.counterparty) or (
                 source == "import"
                 and tx.source == "linked"
@@ -244,24 +275,13 @@ def add_movements(
         if fp in seen or same[exact] > 0:
             if same[exact] > 0:
                 same[exact] -= 1
-                other[exact] = max(0, other[exact] - 1)
+                if other.get(exact):
+                    other[exact].pop()
                 enrich(exact, m)
             duplicates += 1
             continue
-        near = next(
-            (
-                k
-                for d in range(1, NEAR_DAYS + 1)  # nearest day first
-                for k in (
-                    (m.day - timedelta(days=d), m.amount),
-                    (m.day + timedelta(days=d), m.amount),
-                )
-                if other[k] > 0
-            ),
-            None,
-        )
+        near = _take_near(other, m)
         if near is not None:
-            other[near] -= 1
             same[near] = max(0, same[near] - 1)
             enrich(near, m)
             duplicates += 1
@@ -367,8 +387,8 @@ def _edited(t: Transaction, db: Session) -> bool:
 
 def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> list[Merged]:
     """The same payment twice in one account: once from the statement, once from the bank
-    link, up to NEAR_DAYS apart (older versions only looked one day around). Same amount,
-    one-to-one, nearest day first. The statement's copy goes, unless only that copy carries
+    link, a few days apart (BLIND_DAYS, or NEAR_DAYS when the payee looks alike). Same
+    amount, one-to-one, nearest day first. The statement's copy goes, unless only that copy carries
     something the person did (then the other goes); when both carry something, both stay.
     Returns what was (or, without `apply`, would be) merged."""
     txs = [
@@ -392,7 +412,7 @@ def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> li
         for a in imports:
             for b in links:
                 gap = abs((a.day - b.day).days)
-                if gap <= NEAR_DAYS:
+                if gap <= BLIND_DAYS or (gap <= NEAR_DAYS and similar(_wording(a), _wording(b))):
                     pairs.append((gap, a.id, b.id, a, b))
     pairs.sort(key=lambda p: p[:3])
     used: set[int] = set()

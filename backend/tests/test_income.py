@@ -137,3 +137,25 @@ def test_the_dedupe_endpoint_previews_then_merges(owner: TestClient) -> None:
     assert preview == {"merged": 0, "amount": 0, "applied": False}
     assert owner.post("/api/transactions/dedupe", params={"apply": "true"}).json()["applied"]
     assert acc
+
+
+def test_two_payments_of_the_same_amount_days_apart_stay_two(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account
+    from oink.services.ledger import NewMovement, add_movements
+
+    acc_id = owner.post("/api/accounts", json={"name": "Revolut", "balance": "0"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        add_movements(db, account, [NewMovement(date(2026, 8, 30), -2100, "Sindros Dimostheni"),
+                                    NewMovement(date(2026, 9, 14), -7500, "Dynamyk Fitness Club")],
+                      "linked")  # fmt: skip
+        result = add_movements(
+            db, account,
+            [NewMovement(date(2026, 8, 25), -2100, "Festeesaporimurgia"),  # 5 days, other payee
+             NewMovement(date(2026, 9, 19), -7500, "Dynamyk Fitness Club")],  # 5 days, same payee
+            "import",
+        )  # fmt: skip
+    assert [t.description for t in result.added] == ["Festeesaporimurgia"]
+    assert result.duplicates == 1
