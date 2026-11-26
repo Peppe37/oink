@@ -768,4 +768,6 @@ export const it: Dict = {
   "docs.positionKind": "Tipo di strumento",
   "invest.snapshotValue": "Rilevazione del {date}",
   "invest.snapshotOnly": "Valore dello screenshot. Le quote non sono visibili: il valore verrà rettificato dal prossimo screenshot; per aggiornarlo con le quotazioni servono le quantità.",
+  "home.noSalary": "nessuno stipendio accreditato questo mese",
+  "home.salaries": "{count} stipendi accreditati questo mese",
 };

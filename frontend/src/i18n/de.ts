@@ -768,4 +768,6 @@ export const de: Dict = {
   "docs.positionKind": "Wertpapierart",
   "invest.snapshotValue": "Bestand vom {date}",
   "invest.snapshotOnly": "Wert des Screenshots. Anteile sind nicht sichtbar: der nächste Nachweis aktualisiert den Wert; automatische Marktpreise benötigen Mengen.",
+  "home.noSalary": "kein Gehalt in diesem Monat",
+  "home.salaries": "{count} Gehälter in diesem Monat",
 };

@@ -768,4 +768,6 @@ export const es: Dict = {
   "docs.positionKind": "Tipo de título",
   "invest.snapshotValue": "Captura del {date}",
   "invest.snapshotOnly": "Valor de la captura. No aparecen las cantidades: la próxima captura actualizará el valor; la valoración automática necesita cantidades.",
+  "home.noSalary": "ningún sueldo este mes",
+  "home.salaries": "{count} sueldos este mes",
 };

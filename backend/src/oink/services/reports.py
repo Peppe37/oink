@@ -109,8 +109,16 @@ def month_summary(book: Book, month: str) -> dict[str, Any]:
         by_category[t.category or ""] += -v
         by_merchant[(t.counterparty or t.description)[:40]] += -v
     out, inn = sum(-v for _, v in spending), sum(v for _, v in income)
+    paid = sorted((t.day, v) for t, v in income if t.category == "salary")
     return {
         "month": month,
+        # the pay lands on the last working days or on the first ones: a month can hold two
+        # salaries or none, which says nothing about what the person earns
+        "salary": {
+            "count": len(paid),
+            "amount": _r(sum(v for _, v in paid)),
+            "days": [d.isoformat() for d, _ in paid],
+        },
         "income": _r(inn),
         "spending": _r(out),
         "net": _r(inn - out),
@@ -246,6 +254,17 @@ def months_with_data(book: Book) -> list[str]:
     return sorted({d.strftime("%Y-%m") for d in days})
 
 
+def typical_salary(book: Book, until: date, credits: int = 3) -> float | None:
+    """The average of the last few salary credits up to `until` (one a month): what the
+    person earns, whichever month each one happened to land in."""
+    rows = [
+        v for t, v in book.rows(until - timedelta(days=200), until + timedelta(days=1))
+        if v > 0 and t.category == "salary"
+    ]  # fmt: skip
+    rows = rows[-credits:] if rows else []
+    return _r(sum(rows) / len(rows)) if rows else None
+
+
 def facts_for_ai(
     book: Book, month: str, *, with_text: bool, today: date | None = None
 ) -> dict[str, Any]:
@@ -261,9 +280,12 @@ def facts_for_ai(
     data["months_of_history_before"] = len(before)
     data["recurring"] = recurring(book, today=last_day)
     data["net_worth"] = net_worth_at(book, last_day, today)
+    data["typical_monthly_salary"] = typical_salary(book, last_day)
     data["note"] = (
         f"Amounts in {book.base}; negative = money out. Everything is as of {last_day}: "
-        "there is no data after it."
+        "there is no data after it. The salary arrives on the last working days of a month or "
+        "the first of the next: «current.salary» lists the credits of this month; a month with "
+        "none or two is timing, not a change of earnings (see typical_monthly_salary)."
     )
     if not with_text:
         data["current"].pop("top_merchants", None)

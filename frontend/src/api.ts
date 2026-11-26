@@ -15,6 +15,7 @@ export type Tx = {
 export type Recurring = { name: string; monthly: number; last: number; increased: boolean; category: string; last_day: string };
 export type MonthSummary = {
   month: string; income: number; spending: number; net: number; saving_rate: number | null;
+  salary?: { count: number; amount: number; days: string[] };
   by_category: Record<string, number>; top_merchants: Record<string, number>; uncategorised: number; count: number;
 };
 export type Overview = {

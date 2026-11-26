@@ -154,7 +154,9 @@ class AI:
             " The report is about the month in «month», as of «as_of»: never mention or guess"
             " anything after it. Compare only with the months before it; when"
             " «months_of_history_before» is 0 this is the first month with data, so say so and"
-            " make no comparison («usual» figures are then empty, not zero spending).",
+            " make no comparison («usual» figures are then empty, not zero spending)."
+            " Income that is only the salary landing in another month (none this month, two in"
+            " the next) is not news: compare with «typical_monthly_salary» and say so.",
             json.dumps(facts, ensure_ascii=False, default=str),
         )
 

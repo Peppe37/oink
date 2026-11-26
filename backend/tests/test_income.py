@@ -274,3 +274,27 @@ def test_repeated_dedupe_never_goes_below_the_statement_payment_count(owner: Tes
         assert len(merge_duplicates(db, acc_id, apply=True)) == 1
         assert merge_duplicates(db, acc_id, apply=True) == []
         assert db.query(Transaction).filter(Transaction.account_id == acc_id).count() == 2
+
+
+def test_a_month_says_how_many_salaries_landed_in_it(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "0"}).json()["id"]
+    for day, amount in (("2026-03-02", "1516"), ("2026-03-31", "1538"), ("2026-04-30", "1531"),
+                        ("2026-07-01", "1564"), ("2026-07-30", "1574")):  # fmt: skip
+        _add(owner, acc, day, amount, "Pagamento da ACME SRL", category="salary")
+    _add(owner, acc, "2026-06-10", "40", "Pagamento da LUCA BIANCHI")
+    by_month = {}
+    for month in ("2026-03", "2026-04", "2026-06", "2026-07"):
+        by_month[month] = owner.get("/api/reports/summary", params={"month": month}).json()[
+            "current"
+        ]
+    assert [by_month[m]["salary"]["count"] for m in by_month] == [2, 1, 0, 2]
+    assert by_month["2026-03"]["salary"]["days"] == ["2026-03-02", "2026-03-31"]
+    from oink.services import reports as rep
+
+    with _session(owner) as db:
+        from oink.core.db import User
+
+        book = rep.Book.of(db, db.query(User).filter_by(username="giuseppe").one())
+        from datetime import date
+
+        assert rep.typical_salary(book, date(2026, 7, 31)) == round((1531 + 1564 + 1574) / 3, 2)

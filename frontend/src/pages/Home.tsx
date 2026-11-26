@@ -135,7 +135,8 @@ export function Home({ user, onAdd }: { user: User; onAdd: () => void }) {
                     : t("home.belowUsual", { amount: fmt.money(-delta, cur, { compact: true }) })}
               </div>
               <div className="two stats">
-                <div className="stat"><span className="muted">{t("home.earned")}</span><span className="num up strong"><Money value={month.income} currency={cur} compact /></span></div>
+                <div className="stat"><span className="muted">{t("home.earned")}</span><span className="num up strong"><Money value={month.income} currency={cur} compact /></span>
+                  {month.salary && month.salary.count !== 1 && <span className="faint small-text">{month.salary.count === 0 ? t("home.noSalary") : t("home.salaries", { count: month.salary.count })}</span>}</div>
                 <div className="stat"><span className="muted">{t("home.saved")}</span><span className={`num strong ${month.net >= 0 ? "up" : "down"}`}><Money value={month.net} currency={cur} compact /></span></div>
               </div>
               {movers.length > 0 && (

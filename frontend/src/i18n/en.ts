@@ -770,6 +770,8 @@ export const en = {
   "docs.positionKind": "Security type",
   "invest.snapshotValue": "Snapshot dated {date}",
   "invest.snapshotOnly": "Value reported in the screenshot. Units are not visible: the next snapshot updates this value; automatic market pricing needs quantities.",
+  "home.noSalary": "no salary credited this month",
+  "home.salaries": "{count} salaries credited this month",
 };
 
 type Stem<K> = K extends `${infer S}_one` ? S : never;

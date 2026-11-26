@@ -768,4 +768,6 @@ export const fr: Dict = {
   "docs.positionKind": "Type de titre",
   "invest.snapshotValue": "Situation au {date}",
   "invest.snapshotOnly": "Valeur de la capture. Les quantités ne sont pas visibles : la prochaine capture actualisera cette valeur ; la valorisation automatique nécessite les quantités.",
+  "home.noSalary": "aucun salaire ce mois-ci",
+  "home.salaries": "{count} salaires ce mois-ci",
 };
