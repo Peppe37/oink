@@ -69,3 +69,71 @@ def test_a_wrong_rule_category_is_let_go_and_payees_keep_their_category(
     assert result["rules"] == 1
     again = {t["id"]: t for t in owner.get("/api/transactions").json()}
     assert again[wrong["id"]]["category"] != "fuel" and first["category"] == "groceries"
+
+
+def _session(owner: TestClient):  # type: ignore[no-untyped-def]
+    return owner.app.state.db.sessions()  # type: ignore[attr-defined]
+
+
+def test_the_bank_link_and_the_statement_are_one_payment_even_days_apart(
+    owner: TestClient,
+) -> None:
+    from datetime import date
+
+    from oink.core.db import Account
+    from oink.services.ledger import NewMovement, add_movements
+
+    acc_id = owner.post("/api/accounts", json={"name": "Revolut", "balance": "0"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+        linked = [NewMovement(date(2026, 9, 3), -6880, "Trenitalia"),
+                  NewMovement(date(2026, 9, 6), -1030, "IP Italiana Petroli")]  # fmt: skip
+        add_movements(db, account, linked, "linked")
+        statement = [NewMovement(date(2026, 9, 1), -6880, "Trenitalia - Lefrecce"),  # 2 days off
+                     NewMovement(date(2026, 9, 1), -6880, "Trenitalia - Lefrecce"),  # a second ticket
+                     NewMovement(date(2026, 9, 2), -1030, "IP Italiana Petroli")]  # fmt: skip
+        result = add_movements(db, account, statement, "import")
+    assert len(result.added) == 1 and result.duplicates == 2  # only the second ticket is new
+
+
+def test_old_doubles_are_merged_but_what_the_person_did_is_kept(owner: TestClient) -> None:
+    from datetime import date
+
+    from oink.core.db import Account, Transaction
+    from oink.services.ledger import merge_duplicates
+
+    acc_id = owner.post("/api/accounts", json={"name": "Revolut", "balance": "0"}).json()["id"]
+    with _session(owner) as db:
+        account = db.get(Account, acc_id)
+
+        def add(day: int, amount: int, source: str, text: str, **kw: str) -> Transaction:
+            tx = Transaction(user_id=account.user_id, account_id=acc_id, day=date(2026, 9, day),
+                             amount=amount, description=text, source=source,
+                             fingerprint=f"{source}-{day}-{amount}-{text}", **kw)  # fmt: skip
+            db.add(tx)
+            db.flush()
+            return tx
+
+        plain = add(3, -1000, "linked", "Bar"), add(1, -1000, "import", "Bar")
+        edited_statement = add(5, -2000, "import", "Cinema", category="leisure", category_by="user")
+        edited_link = add(8, -2000, "linked", "Cinema")
+        far = (
+            add(3, -500, "linked", "Pane"),
+            add(20, -500, "import", "Pane"),
+        )  # 17 days: two payments
+        db.commit()
+        preview = merge_duplicates(db, acc_id)
+        assert len(preview) == 2 and db.get(Transaction, plain[1].id) is not None  # nothing yet
+        merge_duplicates(db, acc_id, apply=True)
+        ids = {t.id for t in db.query(Transaction).all()}
+    assert plain[1].id not in ids and plain[0].id in ids  # the statement's copy went
+    assert edited_statement.id in ids and edited_link.id not in ids  # the edited one stayed
+    assert far[0].id in ids and far[1].id in ids
+
+
+def test_the_dedupe_endpoint_previews_then_merges(owner: TestClient) -> None:
+    acc = owner.post("/api/accounts", json={"name": "Revolut", "balance": "0"}).json()["id"]
+    preview = owner.post("/api/transactions/dedupe").json()
+    assert preview == {"merged": 0, "amount": 0, "applied": False}
+    assert owner.post("/api/transactions/dedupe", params={"apply": "true"}).json()["applied"]
+    assert acc

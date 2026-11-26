@@ -107,6 +107,7 @@ from oink.services.ledger import (
     add_movements,
     learn_name,
     learn_rule,
+    merge_duplicates,
     refresh_categories,
 )
 from oink.services.review import review
@@ -850,6 +851,24 @@ def untracked_transfers(
 ) -> list[dict[str, object]]:
     """Money sent to own banks/brokers that are not in Oink yet (add them to see it)."""
     return untracked(db, who.user)
+
+
+@api.post("/transactions/dedupe")
+def dedupe_transactions(
+    apply: bool = Query(default=False),
+    who: Caller = Depends(require("transactions:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The same payment twice (statement + bank link, a few days apart). Without `apply`
+    only counts what would be merged."""
+    merged = []
+    for acc_id in db.scalars(select(Account.id).where(Account.user_id == who.user_id)):
+        merged += merge_duplicates(db, acc_id, apply=apply)
+    return {
+        "merged": len(merged),
+        "amount": sum(m.dropped.amount for m in merged),
+        "applied": apply,
+    }
 
 
 @api.post("/transfers/match")

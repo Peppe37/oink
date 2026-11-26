@@ -44,6 +44,9 @@ CATEGORIES = [
 ]
 #: Moving money between your own pockets is not spending.
 INTERNAL = {"transfers", "savings", "investments", "crypto"}
+#: the bank link and the statement of the same payment may differ by this many days
+#: (booking date against the day of the payment, weekends, card payments abroad)
+NEAR_DAYS = 5
 
 
 def normalise(text: str) -> str:
@@ -183,8 +186,8 @@ def add_movements(
     - the same movement seen before (its fingerprint), or
     - the same day and amount already in the account from any source or file (a second
       statement of the same month, a CSV after the PDF, a movement typed by hand), or
-    - the same amount within a day from another source (the bank link books a card
-      payment a day after the statement shows it).
+    - the same amount within NEAR_DAYS from another source (the bank link books a card
+      payment up to a few days after the statement shows it).
 
     Identical movements inside one batch (two coffees) each count once. Within a day the
     newest is shown first, whatever order the bank or file lists them in."""
@@ -200,8 +203,8 @@ def add_movements(
     other: Counter[tuple[date, int]] = Counter()
     blank: dict[tuple[date, int], list[Transaction]] = {}  # existing ones without wording
     if movements:
-        start = min(m.day for m in movements) - timedelta(days=1)
-        end = max(m.day for m in movements) + timedelta(days=1)
+        start = min(m.day for m in movements) - timedelta(days=NEAR_DAYS)
+        end = max(m.day for m in movements) + timedelta(days=NEAR_DAYS)
         for tx in db.scalars(
             select(Transaction).where(
                 Transaction.account_id == account.id,
@@ -248,9 +251,10 @@ def add_movements(
         near = next(
             (
                 k
+                for d in range(1, NEAR_DAYS + 1)  # nearest day first
                 for k in (
-                    (m.day - timedelta(days=1), m.amount),
-                    (m.day + timedelta(days=1), m.amount),
+                    (m.day - timedelta(days=d), m.amount),
+                    (m.day + timedelta(days=d), m.amount),
                 )
                 if other[k] > 0
             ),
@@ -343,3 +347,76 @@ def learn_rule(db: Session, tx: Transaction, category: str) -> None:
     else:
         rule.category = category
     db.commit()
+
+
+@dataclass
+class Merged:
+    kept: Transaction
+    dropped: Transaction
+
+
+def _edited(t: Transaction, db: Session) -> bool:
+    """Something the person (or a plan) did to this movement: it must not be lost."""
+    return bool(
+        t.category_by == "user"
+        or t.plan_id is not None
+        or t.note
+        or db.scalar(select(Transaction.id).where(Transaction.parent_id == t.id).limit(1))
+    )
+
+
+def merge_duplicates(db: Session, account_id: int, *, apply: bool = False) -> list[Merged]:
+    """The same payment twice in one account: once from the statement, once from the bank
+    link, up to NEAR_DAYS apart (older versions only looked one day around). Same amount,
+    one-to-one, nearest day first. The statement's copy goes, unless only that copy carries
+    something the person did (then the other goes); when both carry something, both stay.
+    Returns what was (or, without `apply`, would be) merged."""
+    txs = [
+        t for t in db.scalars(
+            select(Transaction).where(
+                Transaction.account_id == account_id,
+                Transaction.source.in_(("import", "linked")),
+                Transaction.amount != 0,
+                Transaction.category_by != "split",
+                Transaction.parent_id.is_(None),
+            )
+        )
+    ]  # fmt: skip
+    pairs = []
+    by_amount: dict[int, list[Transaction]] = {}
+    for t in txs:
+        by_amount.setdefault(t.amount, []).append(t)
+    for group in by_amount.values():
+        imports = [t for t in group if t.source == "import"]
+        links = [t for t in group if t.source == "linked"]
+        for a in imports:
+            for b in links:
+                gap = abs((a.day - b.day).days)
+                if gap <= NEAR_DAYS:
+                    pairs.append((gap, a.id, b.id, a, b))
+    pairs.sort(key=lambda p: p[:3])
+    used: set[int] = set()
+    done: list[Merged] = []
+    for _, _, _, imp, link in pairs:
+        if imp.id in used or link.id in used:
+            continue
+        used.update((imp.id, link.id))
+        drop, keep = imp, link
+        if _edited(imp, db) and not _edited(link, db):
+            drop, keep = link, imp
+        elif _edited(imp, db) and _edited(link, db):
+            continue  # both carry something: the person decides
+        done.append(Merged(keep, drop))
+        if not apply:
+            continue
+        if drop.transfer_id is not None and keep.transfer_id is None:
+            partner = db.get(Transaction, drop.transfer_id)
+            if partner is not None:
+                partner.transfer_id, keep.transfer_id = keep.id, partner.id
+                keep.category, keep.category_by = drop.category, drop.category_by
+        if not keep.category and drop.category:
+            keep.category, keep.category_by = drop.category, drop.category_by
+        db.delete(drop)
+    if apply:
+        db.commit()
+    return done
